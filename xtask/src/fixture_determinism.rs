@@ -1,5 +1,6 @@
 use anyhow::{bail, Context, Result};
 use clap::{Args, ValueEnum};
+use fastrender::image_compare::{compare_png, CompareConfig};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -12,6 +13,7 @@ const DEFAULT_OUT_DIR: &str = "target/fixture_determinism";
 const DEFAULT_VIEWPORT: &str = "1040x1240";
 const DEFAULT_DPR: f32 = 1.0;
 const DEFAULT_TIMEOUT: u64 = 10;
+const DETERMINISM_DIFFS_DIR: &str = "determinism_diffs";
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
 #[clap(rename_all = "lowercase")]
@@ -227,13 +229,29 @@ struct ReportTotals {
   fixtures: usize,
   nondeterministic: usize,
   render_failures: usize,
+  artifact_failures: usize,
 }
 
 #[derive(Serialize)]
 struct FixtureNondeterminism {
   name: String,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  artifacts: Option<DeterminismArtifacts>,
   occurrences: Vec<Occurrence>,
   worst: Occurrence,
+}
+
+#[derive(Serialize, Clone)]
+struct DeterminismArtifacts {
+  root: String,
+  expected_png: String,
+  actual_png: String,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  diff_png: Option<String>,
+  snapshot_before_dir: String,
+  snapshot_after_dir: String,
+  diff_snapshots_html: String,
+  diff_snapshots_json: String,
 }
 
 #[derive(Serialize, Clone)]
@@ -266,8 +284,9 @@ pub fn run_fixture_determinism(args: FixtureDeterminismArgs) -> Result<()> {
 
   let render_fixtures_exe = render_fixtures_executable(&repo_root);
   let diff_renders_exe = crate::diff_renders_executable(&repo_root);
+  let diff_snapshots_exe = diff_snapshots_executable(&repo_root);
   if args.no_build {
-    for exe in [&render_fixtures_exe, &diff_renders_exe] {
+    for exe in [&render_fixtures_exe, &diff_renders_exe, &diff_snapshots_exe] {
       if !exe.is_file() {
         bail!(
           "--no-build was set, but required executable does not exist at {}",
@@ -282,8 +301,9 @@ pub fn run_fixture_determinism(args: FixtureDeterminismArgs) -> Result<()> {
       .arg("--release")
       .args(["--bin", "render_fixtures"])
       .args(["--bin", "diff_renders"])
+      .args(["--bin", "diff_snapshots"])
       .current_dir(&repo_root);
-    println!("Building render_fixtures + diff_renders...");
+    println!("Building render_fixtures + diff_renders + diff_snapshots...");
     crate::run_command(build_cmd)?;
   }
 
@@ -432,6 +452,7 @@ pub fn run_fixture_determinism(args: FixtureDeterminismArgs) -> Result<()> {
       let worst = occurrences[0].clone();
       FixtureNondeterminism {
         name,
+        artifacts: None,
         occurrences,
         worst,
       }
@@ -465,6 +486,23 @@ pub fn run_fixture_determinism(args: FixtureDeterminismArgs) -> Result<()> {
     a.name.cmp(&b.name)
   });
 
+  let determinism_root = crate::cargo_target_dir(&repo_root).join(DETERMINISM_DIFFS_DIR);
+  let mut artifact_failures = Vec::new();
+  for fixture in &mut nondeterministic {
+    if let Err(err) = capture_artifacts_for_fixture(
+      &repo_root,
+      &fixtures_root,
+      &render_fixtures_exe,
+      &diff_snapshots_exe,
+      &determinism_root,
+      fixture,
+      &layout,
+      &args,
+    ) {
+      artifact_failures.push(format!("{}: {err}", fixture.name));
+    }
+  }
+
   let report = FixtureDeterminismReport {
     repeat: args.repeat,
     fixtures_dir: fixtures_root.display().to_string(),
@@ -479,6 +517,7 @@ pub fn run_fixture_determinism(args: FixtureDeterminismArgs) -> Result<()> {
       fixtures: all_fixtures.len(),
       nondeterministic: nondeterministic.len(),
       render_failures,
+      artifact_failures: artifact_failures.len(),
     },
     nondeterministic,
   };
@@ -488,13 +527,22 @@ pub fn run_fixture_determinism(args: FixtureDeterminismArgs) -> Result<()> {
     .with_context(|| format!("write {}", layout.report_html.display()))?;
 
   println!(
-    "Done in {:.1}s. {} nondeterministic fixture(s) ({} render run(s) failed).",
+    "Done in {:.1}s. {} nondeterministic fixture(s) ({} render run(s) failed, {} artifact capture failure(s)).",
     start.elapsed().as_secs_f64(),
     report.totals.nondeterministic,
-    report.totals.render_failures
+    report.totals.render_failures,
+    report.totals.artifact_failures
   );
   println!("HTML report: {}", layout.report_html.display());
   println!("JSON report: {}", layout.report_json.display());
+
+  if !artifact_failures.is_empty() {
+    println!();
+    println!("Artifact capture failures:");
+    for err in &artifact_failures {
+      println!("- {err}");
+    }
+  }
 
   if report.totals.nondeterministic > 0 {
     println!();
@@ -521,16 +569,56 @@ pub fn run_fixture_determinism(args: FixtureDeterminismArgs) -> Result<()> {
         before_run = worst.before_run,
         after_run = worst.after_run
       );
+      if let Some(artifacts) = fixture.artifacts.as_ref() {
+        println!("  Determinism artifacts: {}", artifacts.root);
+        println!("    expected: {}", artifacts.expected_png);
+        println!("    actual:   {}", artifacts.actual_png);
+        if let Some(diff) = artifacts.diff_png.as_deref() {
+          println!("    diff:     {diff}");
+        }
+        println!("    snapshot run1: {}", artifacts.snapshot_before_dir);
+        println!("    snapshot run2: {}", artifacts.snapshot_after_dir);
+        println!("    diff_snapshots: {}", artifacts.diff_snapshots_html);
+      }
     }
   }
 
-  let should_fail = (report.totals.nondeterministic > 0 || report.totals.render_failures > 0)
+  let should_fail = (report.totals.nondeterministic > 0
+    || report.totals.render_failures > 0
+    || report.totals.artifact_failures > 0)
     && !args.allow_differences;
   if should_fail {
-    bail!(
+    let mut message = format!(
       "fixture determinism audit found differences; report: {}",
       layout.report_html.display()
     );
+    if report.totals.nondeterministic > 0 {
+      message.push_str("\n\nPer-fixture determinism artifacts:");
+      for fixture in &report.nondeterministic {
+        if let Some(artifacts) = fixture.artifacts.as_ref() {
+          message.push_str(&format!(
+            "\n- {name}\n  expected: {expected}\n  actual:   {actual}\n  diff:     {diff}\n  snapshot run1: {snap1}\n  snapshot run2: {snap2}\n  diff_snapshots: {stage}",
+            name = fixture.name,
+            expected = artifacts.expected_png,
+            actual = artifacts.actual_png,
+            diff = artifacts.diff_png.as_deref().unwrap_or("-"),
+            snap1 = artifacts.snapshot_before_dir,
+            snap2 = artifacts.snapshot_after_dir,
+            stage = artifacts.diff_snapshots_html,
+          ));
+        } else {
+          let error = fixture.worst.error.as_deref().unwrap_or("-");
+          message.push_str(&format!(
+            "\n- {name}\n  status: {status}\n  pair report: {pair}\n  error: {error}",
+            name = fixture.name,
+            status = fixture.worst.status.label(),
+            pair = fixture.worst.pair_report,
+            error = error,
+          ));
+        }
+      }
+    }
+    bail!("{message}");
   }
 
   Ok(())
@@ -604,6 +692,12 @@ fn render_fixtures_executable(repo_root: &Path) -> PathBuf {
     .join(format!("render_fixtures{}", std::env::consts::EXE_SUFFIX))
 }
 
+fn diff_snapshots_executable(repo_root: &Path) -> PathBuf {
+  crate::cargo_target_dir(repo_root)
+    .join("release")
+    .join(format!("diff_snapshots{}", std::env::consts::EXE_SUFFIX))
+}
+
 fn build_render_fixtures_command(
   render_fixtures_exe: &Path,
   fixtures_root: &Path,
@@ -630,6 +724,33 @@ fn build_render_fixtures_command(
   if let Some((idx, total)) = args.shard {
     cmd.arg("--shard").arg(format!("{idx}/{total}"));
   }
+  Ok(cmd)
+}
+
+fn build_render_fixtures_snapshot_command(
+  render_fixtures_exe: &Path,
+  fixtures_root: &Path,
+  out_dir: &Path,
+  args: &FixtureDeterminismArgs,
+  fixture: &str,
+) -> Result<Command> {
+  // Do not forward `--fixtures` / `--shard` from the outer determinism harness: we always want to
+  // re-run exactly the single nondeterministic fixture.
+  let mut cmd = Command::new(render_fixtures_exe);
+  cmd.env("FASTR_USE_BUNDLED_FONTS", "1");
+  cmd.arg("--fixtures-dir").arg(fixtures_root);
+  cmd.arg("--out-dir").arg(out_dir);
+  cmd
+    .arg("--viewport")
+    .arg(format!("{}x{}", args.viewport.0, args.viewport.1));
+  cmd.arg("--dpr").arg(args.dpr.to_string());
+  cmd.arg("--media").arg(args.media.as_cli_value());
+  cmd.arg("--timeout").arg(args.timeout.to_string());
+  if let Some(jobs) = args.jobs {
+    cmd.arg("--jobs").arg(jobs.to_string());
+  }
+  cmd.arg("--fixtures").arg(fixture);
+  cmd.arg("--write-snapshot");
   Ok(cmd)
 }
 
@@ -660,6 +781,26 @@ fn build_diff_renders_command(
   if ignore_alpha {
     cmd.arg("--ignore-alpha");
   }
+  Ok(cmd)
+}
+
+fn build_diff_snapshots_command(
+  diff_snapshots_exe: &Path,
+  before_dir: &Path,
+  after_dir: &Path,
+  json_path: &Path,
+  html_path: &Path,
+) -> Result<Command> {
+  let mut cmd = Command::new(diff_snapshots_exe);
+  cmd
+    .arg("--before")
+    .arg(before_dir)
+    .arg("--after")
+    .arg(after_dir)
+    .arg("--json")
+    .arg(json_path)
+    .arg("--html")
+    .arg(html_path);
   Ok(cmd)
 }
 
@@ -863,7 +1004,7 @@ fn render_html(layout: &Layout, report: &FixtureDeterminismReport) -> String {
     <p><strong>Output:</strong> {out_root}</p>
     <p><strong>Input:</strong> {fixtures_dir}</p>
     <p><strong>Repeat:</strong> {repeat} | <strong>Viewport:</strong> {vw}x{vh} | <strong>DPR:</strong> {dpr} | <strong>Media:</strong> {media} | <strong>Timeout:</strong> {timeout}s | <strong>Ignore alpha:</strong> {ignore_alpha}</p>
-    <p>{fixtures} fixture(s) discovered across comparisons; {nondet} nondeterministic, {render_failures} render run(s) failed.</p>
+    <p>{fixtures} fixture(s) discovered across comparisons; {nondet} nondeterministic, {render_failures} render run(s) failed, {artifact_failures} artifact capture failure(s).</p>
     <h2>Comparison reports</h2>
     <ul>
       {comparisons}
@@ -904,6 +1045,7 @@ fn render_html(layout: &Layout, report: &FixtureDeterminismReport) -> String {
     fixtures = report.totals.fixtures,
     nondet = report.totals.nondeterministic,
     render_failures = report.totals.render_failures,
+    artifact_failures = report.totals.artifact_failures,
     comparisons = comparisons,
     rows = rows,
   )
@@ -912,5 +1054,151 @@ fn render_html(layout: &Layout, report: &FixtureDeterminismReport) -> String {
 fn write_json_pretty(path: &Path, value: &impl Serialize) -> Result<()> {
   let json = serde_json::to_string_pretty(value).context("serialize json")?;
   fs::write(path, json).with_context(|| format!("write {}", path.display()))?;
+  Ok(())
+}
+
+fn capture_artifacts_for_fixture(
+  repo_root: &Path,
+  fixtures_root: &Path,
+  render_fixtures_exe: &Path,
+  diff_snapshots_exe: &Path,
+  determinism_root: &Path,
+  fixture: &mut FixtureNondeterminism,
+  layout: &Layout,
+  args: &FixtureDeterminismArgs,
+) -> Result<()> {
+  let Some(diff_occurrence) = fixture
+    .occurrences
+    .iter()
+    .find(|occ| occ.status == EntryStatus::Diff)
+    .cloned()
+  else {
+    // Snapshot diffs are only actionable when both runs produced PNGs that differ.
+    return Ok(());
+  };
+
+  let name = fixture.name.as_str();
+  let out_root = determinism_root.join(name);
+  clear_dir(&out_root).with_context(|| format!("clear {}", out_root.display()))?;
+
+  // --- Pixel artifacts (expected/actual/diff) ---
+  let before_png = layout
+    .run_dir(diff_occurrence.before_run)
+    .join(format!("{name}.png"));
+  let after_png = layout
+    .run_dir(diff_occurrence.after_run)
+    .join(format!("{name}.png"));
+
+  let expected_png_path = out_root.join(format!("{name}_expected.png"));
+  let actual_png_path = out_root.join(format!("{name}_actual.png"));
+  fs::copy(&before_png, &expected_png_path).with_context(|| {
+    format!(
+      "copy expected png from {} to {}",
+      before_png.display(),
+      expected_png_path.display()
+    )
+  })?;
+  fs::copy(&after_png, &actual_png_path).with_context(|| {
+    format!(
+      "copy actual png from {} to {}",
+      after_png.display(),
+      actual_png_path.display()
+    )
+  })?;
+
+  let expected_bytes = fs::read(&expected_png_path)
+    .with_context(|| format!("read {}", expected_png_path.display()))?;
+  let actual_bytes =
+    fs::read(&actual_png_path).with_context(|| format!("read {}", actual_png_path.display()))?;
+
+  let compare_config = if args.ignore_alpha {
+    CompareConfig::strict().with_compare_alpha(false)
+  } else {
+    CompareConfig::strict()
+  };
+  let diff = compare_png(&actual_bytes, &expected_bytes, &compare_config).context("diff PNGs")?;
+
+  let diff_png_path = out_root.join(format!("{name}_diff.png"));
+  let diff_written = match diff.diff_png().context("encode diff png")? {
+    Some(bytes) => {
+      fs::write(&diff_png_path, bytes).with_context(|| format!("write {}", diff_png_path.display()))?;
+      Some(diff_png_path)
+    }
+    None => None,
+  };
+
+  // --- Snapshot capture (re-run with --write-snapshot) ---
+  let run1_out = out_root.join("run1");
+  let run2_out = out_root.join("run2");
+  clear_dir(&run1_out).with_context(|| format!("clear {}", run1_out.display()))?;
+  clear_dir(&run2_out).with_context(|| format!("clear {}", run2_out.display()))?;
+
+  for (idx, out_dir) in [(1usize, &run1_out), (2usize, &run2_out)] {
+    let mut cmd =
+      build_render_fixtures_snapshot_command(render_fixtures_exe, fixtures_root, out_dir, args, name)?;
+    cmd.current_dir(repo_root);
+    println!("Capturing snapshot for {name} (run {idx}/2)...");
+    let status = run_command_allow_failure(cmd).context("render_fixtures failed to run")?;
+    if !status.success() {
+      bail!("snapshot capture failed for {name} (run {idx}/2) with status {status}");
+    }
+  }
+
+  let snapshot_before_dir = run1_out.join(name);
+  let snapshot_after_dir = run2_out.join(name);
+
+  // For nicer diff_snapshots HTML output, ensure the directories contain a PNG that matches the
+  // exact pixel mismatch captured above.
+  fs::copy(&expected_png_path, snapshot_before_dir.join("render.png")).with_context(|| {
+    format!(
+      "copy {} to {}",
+      expected_png_path.display(),
+      snapshot_before_dir.join("render.png").display()
+    )
+  })?;
+  fs::copy(&actual_png_path, snapshot_after_dir.join("render.png")).with_context(|| {
+    format!(
+      "copy {} to {}",
+      actual_png_path.display(),
+      snapshot_after_dir.join("render.png").display()
+    )
+  })?;
+
+  for required in [
+    snapshot_before_dir.join("snapshot.json"),
+    snapshot_before_dir.join("diagnostics.json"),
+    snapshot_after_dir.join("snapshot.json"),
+    snapshot_after_dir.join("diagnostics.json"),
+  ] {
+    if !required.is_file() {
+      bail!("missing snapshot output {}", required.display());
+    }
+  }
+
+  // --- Stage-level snapshot diff ---
+  let diff_snapshots_json = out_root.join("diff_snapshots.json");
+  let diff_snapshots_html = out_root.join("diff_snapshots.html");
+  let mut cmd = build_diff_snapshots_command(
+    diff_snapshots_exe,
+    &snapshot_before_dir,
+    &snapshot_after_dir,
+    &diff_snapshots_json,
+    &diff_snapshots_html,
+  )?;
+  cmd.current_dir(repo_root);
+  println!("Generating diff_snapshots report for {name}...");
+  crate::run_command(cmd).context("diff_snapshots failed")?;
+
+  fixture.artifacts = Some(DeterminismArtifacts {
+    root: path_relative_to_root(repo_root, &out_root),
+    expected_png: path_relative_to_root(repo_root, &expected_png_path),
+    actual_png: path_relative_to_root(repo_root, &actual_png_path),
+    diff_png: diff_written.as_deref().map(|p| path_relative_to_root(repo_root, p)),
+    snapshot_before_dir: path_relative_to_root(repo_root, &snapshot_before_dir),
+    snapshot_after_dir: path_relative_to_root(repo_root, &snapshot_after_dir),
+    diff_snapshots_html: path_relative_to_root(repo_root, &diff_snapshots_html),
+    diff_snapshots_json: path_relative_to_root(repo_root, &diff_snapshots_json),
+  });
+
   Ok(())
 }
