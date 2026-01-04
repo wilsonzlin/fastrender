@@ -11010,6 +11010,22 @@ fn style_layout_fingerprint(style: &ComputedStyle) -> u64 {
   hash_overflow(&style.overflow_y, &mut h);
   hash_enum_discriminant(&style.object_fit, &mut h);
   hash_object_position(&style.object_position, &mut h);
+  hash_enum_discriminant(&style.translate, &mut h);
+  if let crate::css::types::TranslateValue::Values { x, y, z } = style.translate {
+    hash_length(&x, &mut h);
+    hash_length(&y, &mut h);
+    hash_length(&z, &mut h);
+  }
+  hash_enum_discriminant(&style.rotate, &mut h);
+  if let crate::css::types::RotateValue::Angle(deg) = style.rotate {
+    hash_f32(deg, &mut h);
+  }
+  hash_enum_discriminant(&style.scale, &mut h);
+  if let crate::css::types::ScaleValue::Values { x, y, z } = style.scale {
+    hash_f32(x, &mut h);
+    hash_f32(y, &mut h);
+    hash_f32(z, &mut h);
+  }
   hash_transforms(&style.transform, &mut h);
   hash_enum_discriminant(&style.transform_box, &mut h);
   hash_enum_discriminant(&style.transform_style, &mut h);
@@ -14590,6 +14606,44 @@ mod tests {
     assert_ne!(
       hash_a, hash_b,
       "scroll snap settings must influence layout fingerprints"
+    );
+  }
+
+  #[test]
+  fn individual_transforms_change_fingerprint() {
+    let base = ComputedStyle::default();
+    let base_hash = style_layout_fingerprint(&base);
+
+    let mut translated = base.clone();
+    translated.translate = crate::css::types::TranslateValue::Values {
+      x: Length::px(10.0),
+      y: Length::px(0.0),
+      z: Length::px(0.0),
+    };
+    assert_ne!(
+      base_hash,
+      style_layout_fingerprint(&translated),
+      "translate must influence layout fingerprints"
+    );
+
+    let mut rotated = base.clone();
+    rotated.rotate = crate::css::types::RotateValue::Angle(45.0);
+    assert_ne!(
+      base_hash,
+      style_layout_fingerprint(&rotated),
+      "rotate must influence layout fingerprints"
+    );
+
+    let mut scaled = base.clone();
+    scaled.scale = crate::css::types::ScaleValue::Values {
+      x: 2.0,
+      y: 1.0,
+      z: 1.0,
+    };
+    assert_ne!(
+      base_hash,
+      style_layout_fingerprint(&scaled),
+      "scale must influence layout fingerprints"
     );
   }
 

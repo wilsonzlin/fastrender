@@ -8,12 +8,14 @@
 
 use fastrender::build_stacking_tree;
 use fastrender::creates_stacking_context;
+use fastrender::css::types::{RotateValue, ScaleValue, TranslateValue};
 use fastrender::geometry::Rect;
 use fastrender::get_stacking_context_reason;
 use fastrender::ComputedStyle;
 use fastrender::Display;
 use fastrender::Float;
 use fastrender::FragmentNode;
+use fastrender::Length;
 use fastrender::Overflow;
 use fastrender::Position;
 use fastrender::StackingContext;
@@ -187,6 +189,50 @@ fn test_transform_creates_stacking_context() {
 
   let mut style = ComputedStyle::default();
   style.transform.push(Transform::Rotate(45.0));
+  assert!(creates_stacking_context(&style, None, false));
+  assert_eq!(
+    get_stacking_context_reason(&style, None, false),
+    Some(StackingContextReason::Transform)
+  );
+}
+
+#[test]
+fn test_translate_creates_stacking_context() {
+  let mut style = ComputedStyle::default();
+  style.translate = TranslateValue::Values {
+    x: Length::px(1.0),
+    y: Length::px(0.0),
+    z: Length::px(0.0),
+  };
+
+  assert!(creates_stacking_context(&style, None, false));
+  assert_eq!(
+    get_stacking_context_reason(&style, None, false),
+    Some(StackingContextReason::Transform)
+  );
+}
+
+#[test]
+fn test_rotate_property_creates_stacking_context() {
+  let mut style = ComputedStyle::default();
+  style.rotate = RotateValue::Angle(45.0);
+
+  assert!(creates_stacking_context(&style, None, false));
+  assert_eq!(
+    get_stacking_context_reason(&style, None, false),
+    Some(StackingContextReason::Transform)
+  );
+}
+
+#[test]
+fn test_scale_property_creates_stacking_context() {
+  let mut style = ComputedStyle::default();
+  style.scale = ScaleValue::Values {
+    x: 2.0,
+    y: 1.0,
+    z: 1.0,
+  };
+
   assert!(creates_stacking_context(&style, None, false));
   assert_eq!(
     get_stacking_context_reason(&style, None, false),

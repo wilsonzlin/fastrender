@@ -58,6 +58,7 @@ mod text_shadow_color_emoji_golden;
 mod scene_tree_test;
 mod shadow_dom_slotted_paint;
 mod stacking_test;
+mod individual_transform_properties_test;
 mod svg_context_paint_font;
 mod svg_filter_color_interpolation;
 mod svg_filter_color_interpolation_golden;

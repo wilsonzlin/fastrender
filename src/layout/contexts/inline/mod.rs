@@ -10011,7 +10011,7 @@ fn width_span(lines: &[Line]) -> f32 {
 #[cfg(test)]
 mod tests {
   use super::*;
-  use crate::css::types::Transform;
+  use crate::css::types::{Transform, TranslateValue};
   use crate::geometry::Size;
   use crate::layout::engine::{
     enable_layout_parallel_debug_counters, layout_parallel_debug_counters,
@@ -10386,6 +10386,106 @@ mod tests {
     wrapper_style.display = Display::Inline;
     wrapper_style.font_size = 16.0;
     wrapper_style.transform = vec![Transform::TranslateX(Length::px(0.0))];
+    let wrapper_style = Arc::new(wrapper_style);
+
+    let mut fixed_style = ComputedStyle::default();
+    fixed_style.display = Display::Block;
+    fixed_style.font_size = 16.0;
+    fixed_style.position = Position::Fixed;
+    fixed_style.left = Some(Length::percent(50.0));
+    fixed_style.top = Some(Length::px(0.0));
+    fixed_style.width = Some(Length::px(10.0));
+    fixed_style.height = Some(Length::px(10.0));
+    let fixed_child =
+      BoxNode::new_block(Arc::new(fixed_style), FormattingContextType::Block, vec![]);
+
+    let wrapper = BoxNode::new_inline(wrapper_style, vec![replaced, fixed_child]);
+    let root = make_inline_container(vec![wrapper]);
+
+    let constraints = LayoutConstraints::definite_width(300.0);
+    let fragment = ifc.layout(&root, &constraints).expect("layout");
+    let fixed_fragment =
+      find_fragment_by_position(&fragment, Position::Fixed).expect("fixed fragment");
+
+    assert!(
+      (fixed_fragment.bounds.x() - 100.0).abs() < 1e-3,
+      "expected fixedpos x≈100 (50% of 200px), got {}",
+      fixed_fragment.bounds.x()
+    );
+  }
+
+  #[test]
+  fn abspos_percent_resolves_against_translated_inline_containing_block() {
+    let ifc = InlineFormattingContext::with_font_context_and_viewport(
+      FontContext::new(),
+      Size::new(300.0, 200.0),
+    );
+
+    let replaced = BoxNode::new_replaced(
+      default_style(),
+      ReplacedType::Canvas,
+      Some(Size::new(200.0, 10.0)),
+      None,
+    );
+
+    let mut wrapper_style = ComputedStyle::default();
+    wrapper_style.display = Display::Inline;
+    wrapper_style.font_size = 16.0;
+    // Individual transforms must establish containing blocks just like `transform`.
+    wrapper_style.translate = TranslateValue::Values {
+      x: Length::px(1.0),
+      y: Length::px(0.0),
+      z: Length::px(0.0),
+    };
+    let wrapper_style = Arc::new(wrapper_style);
+
+    let mut abs_style = ComputedStyle::default();
+    abs_style.display = Display::Block;
+    abs_style.font_size = 16.0;
+    abs_style.position = Position::Absolute;
+    abs_style.left = Some(Length::percent(50.0));
+    abs_style.top = Some(Length::px(0.0));
+    abs_style.width = Some(Length::px(10.0));
+    abs_style.height = Some(Length::px(10.0));
+    let abs_child = BoxNode::new_block(Arc::new(abs_style), FormattingContextType::Block, vec![]);
+
+    let wrapper = BoxNode::new_inline(wrapper_style, vec![replaced, abs_child]);
+    let root = make_inline_container(vec![wrapper]);
+
+    let constraints = LayoutConstraints::definite_width(300.0);
+    let fragment = ifc.layout(&root, &constraints).expect("layout");
+    let abs_fragment =
+      find_fragment_by_position(&fragment, Position::Absolute).expect("absolute fragment");
+
+    assert!(
+      (abs_fragment.bounds.x() - 100.0).abs() < 1e-3,
+      "expected abspos x≈100 (50% of 200px), got {}",
+      abs_fragment.bounds.x()
+    );
+  }
+
+  #[test]
+  fn fixedpos_percent_resolves_against_translated_inline_containing_block() {
+    let ifc = InlineFormattingContext::with_font_context_and_viewport(
+      FontContext::new(),
+      Size::new(300.0, 200.0),
+    );
+
+    let replaced = BoxNode::new_replaced(
+      default_style(),
+      ReplacedType::Canvas,
+      Some(Size::new(200.0, 10.0)),
+      None,
+    );
+
+    let mut wrapper_style = ComputedStyle::default();
+    wrapper_style.display = Display::Inline;
+    wrapper_style.font_size = 16.0;
+    wrapper_style.translate = TranslateValue::Values {
+      x: Length::px(1.0),
+      y: Length::px(0.0),
+      z: Length::px(0.0),
+    };
     let wrapper_style = Arc::new(wrapper_style);
 
     let mut fixed_style = ComputedStyle::default();

@@ -65,10 +65,12 @@ pub fn resolve_transforms(
     // The final matrix is then computed using standard transform-list semantics (the rightmost
     // transform applies first).
     if let TranslateValue::Values { x, y, z } = style.translate {
-      let tx = resolve_transform_length(&x, style.font_size, style.root_font_size, percentage_width);
+      let tx =
+        resolve_transform_length(&x, style.font_size, style.root_font_size, percentage_width);
       let ty =
         resolve_transform_length(&y, style.font_size, style.root_font_size, percentage_height);
-      let tz = resolve_transform_length(&z, style.font_size, style.root_font_size, percentage_width);
+      let tz =
+        resolve_transform_length(&z, style.font_size, style.root_font_size, percentage_width);
       ts = ts.multiply(&Transform3D::translate(tx, ty, tz));
     }
 
