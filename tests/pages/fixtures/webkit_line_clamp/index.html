@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>-webkit-line-clamp fixture</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        height: 100%;
+        background: #ffffff;
+        color: #111111;
+        font: 20px/28px "Noto Sans", sans-serif;
+      }
+
+      .frame {
+        margin: 80px;
+        width: 360px;
+        padding: 18px;
+        border: 3px solid #111111;
+        border-radius: 14px;
+        background: #f2f2f2;
+      }
+
+      .clamped {
+        display: -webkit-box;
+        -webkit-box-orient: vertical;
+        -webkit-line-clamp: 3;
+        overflow: hidden;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="frame">
+      <div class="clamped">
+        FastRender should truncate this paragraph after exactly three lines using the classic WebKit
+        -webkit-line-clamp pattern. Any additional lines must be hidden, and an ellipsis should
+        appear at the end of the third line.
+      </div>
+    </div>
+  </body>
+</html>

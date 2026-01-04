@@ -109,6 +109,11 @@ const PAGE_FIXTURES: &[PageFixture] = &[
     shots: DEFAULT_SHOTS,
   },
   PageFixture {
+    name: "webkit_line_clamp",
+    html: "webkit_line_clamp/index.html",
+    shots: DEFAULT_SHOTS,
+  },
+  PageFixture {
     name: "mask_parallel_tiling_translation",
     html: "mask_parallel_tiling_translation/index.html",
     shots: PARALLEL_TILING_SHOTS,
