@@ -213,7 +213,7 @@ mod disk_cache_main {
     /// Prefetch image-like URLs referenced directly from HTML (true/false)
     #[arg(
       long,
-      default_value_t = true,
+      default_value_t = false,
       action = ArgAction::Set,
       num_args = 0..=1,
       default_missing_value = "true"
@@ -524,6 +524,60 @@ mod disk_cache_main {
     }
 
     false
+  }
+
+  fn link_rel_is_manifest_candidate(rel_tokens: &[String]) -> bool {
+    rel_tokens.iter().any(|t| t == "manifest")
+  }
+
+  fn record_manifest_candidates(
+    all: &RefCell<BTreeSet<String>>,
+    dom: &DomNode,
+    base_url: &str,
+    out: &mut BTreeSet<String>,
+    max_total: usize,
+  ) {
+    // Keep worst-case work bounded for pages that ship multiple manifests.
+    const MAX_MANIFESTS_PER_PAGE: usize = 8;
+    let mut stack: Vec<&DomNode> = vec![dom];
+    let mut inserted = 0usize;
+
+    while let Some(node) = stack.pop() {
+      if max_total != 0 && all.borrow().len() >= max_total {
+        break;
+      }
+      if inserted >= MAX_MANIFESTS_PER_PAGE {
+        break;
+      }
+
+      if let Some(tag) = node.tag_name() {
+        if tag.eq_ignore_ascii_case("link") {
+          let href = node.get_attribute_ref("href").unwrap_or("");
+          if !href.trim().is_empty() {
+            let rel_attr = node.get_attribute_ref("rel").unwrap_or("");
+            if !rel_attr.trim().is_empty() {
+              let rel_tokens = tokenize_rel_list(rel_attr);
+              if !rel_tokens.is_empty() && link_rel_is_manifest_candidate(&rel_tokens) {
+                if let Some(resolved) = resolve_href(base_url, href) {
+                  let before = out.len();
+                  record_image_candidate(all, out, &resolved, max_total, max_total);
+                  if out.len() > before {
+                    inserted += 1;
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+
+      if node.template_contents_are_inert() {
+        continue;
+      }
+      for child in node.children.iter().rev() {
+        stack.push(child);
+      }
+    }
   }
 
   fn record_iframe_document_candidates(
@@ -1433,7 +1487,7 @@ mod disk_cache_main {
       }
     }
 
-    if opts.prefetch_icons {
+    if opts.prefetch_icons || (opts.prefetch_images && dom.is_some()) {
       if let Some(dom) = dom.as_ref() {
         record_icon_candidates(
           &all_asset_urls,
@@ -1442,10 +1496,22 @@ mod disk_cache_main {
           &mut image_urls,
           opts.max_discovered_assets_per_page,
         );
-      } else {
+      } else if opts.prefetch_icons {
         record_icon_candidates_from_html(
           &all_asset_urls,
           html,
+          base_url,
+          &mut image_urls,
+          opts.max_discovered_assets_per_page,
+        );
+      }
+    }
+
+    if opts.prefetch_images {
+      if let Some(dom) = dom.as_ref() {
+        record_manifest_candidates(
+          &all_asset_urls,
+          dom,
           base_url,
           &mut image_urls,
           opts.max_discovered_assets_per_page,
