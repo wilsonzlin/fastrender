@@ -153,6 +153,7 @@ use tiny_skia::Transform;
 
 const DEADLINE_STRIDE: usize = 256;
 const CLIP_MASK_DEADLINE_STRIDE: usize = 16 * 1024;
+const PRESERVE_3D_SCENE_RECURSION_LIMIT: usize = 32;
 
 fn map_blend_mode(mode: BlendMode) -> tiny_skia::BlendMode {
   match mode {
@@ -2425,6 +2426,7 @@ pub struct DisplayListRenderer {
   perspective_stack: Vec<Transform3D>,
   culled_depth: usize,
   preserve_3d_disabled: bool,
+  preserve_3d_scene_depth: usize,
   background: Rgba,
   paint_parallelism: PaintParallelism,
   image_cache: HashMap<ImageKey, Arc<Pixmap>>,
@@ -3031,6 +3033,7 @@ impl DisplayListRenderer {
       perspective_stack: vec![Transform3D::identity()],
       culled_depth: 0,
       preserve_3d_disabled: false,
+      preserve_3d_scene_depth: 0,
       background,
       paint_parallelism: PaintParallelism::default(),
       image_cache: HashMap::new(),
@@ -5779,6 +5782,7 @@ impl DisplayListRenderer {
     let scale = self.scale;
     let background = self.background;
     let preserve_3d_disabled = self.preserve_3d_disabled;
+    let preserve_3d_scene_depth = self.preserve_3d_scene_depth;
     let color_renderer = self.color_renderer.clone();
     let color_cache = self.color_cache.clone();
     let glyph_cache = self.glyph_cache.clone();
@@ -5830,6 +5834,7 @@ impl DisplayListRenderer {
                 glyph_cache.clone(),
               )?;
               renderer.preserve_3d_disabled = preserve_3d_disabled;
+              renderer.preserve_3d_scene_depth = preserve_3d_scene_depth;
               renderer.paint_parallelism = PaintParallelism::disabled();
               renderer.gradient_cache = gradient_cache.clone();
               renderer.gradient_pixmap_cache = gradient_pixmap_cache.clone();
@@ -5904,7 +5909,9 @@ impl DisplayListRenderer {
       let item = items
         .get(idx)
         .expect("display list iteration should remain in-bounds");
-      if !self.preserve_3d_disabled {
+      if !self.preserve_3d_disabled
+        && self.preserve_3d_scene_depth < PRESERVE_3D_SCENE_RECURSION_LIMIT
+      {
         if let DisplayItem::PushStackingContext(sc) = item {
           if matches!(sc.transform_style, TransformStyle::Preserve3d) {
             // `render_item` normally applies pending backdrop filters before processing the next
@@ -6031,7 +6038,8 @@ impl DisplayListRenderer {
       self.font_ctx.clone(),
       self.scale,
     )?;
-    renderer.preserve_3d_disabled = true;
+    renderer.preserve_3d_disabled = self.preserve_3d_disabled;
+    renderer.preserve_3d_scene_depth = self.preserve_3d_scene_depth.saturating_add(1);
     renderer.gradient_cache = self.gradient_cache.clone();
     renderer.gradient_pixmap_cache = self.gradient_pixmap_cache.clone();
     renderer.diagnostics_enabled = self.diagnostics_enabled;
