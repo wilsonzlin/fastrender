@@ -1483,7 +1483,9 @@ pub fn extract_css_links(
       return;
     }
 
-    let href = normalize_scheme_slashes(link.href.trim());
+    // DOM attribute parsing decodes valid HTML entities, but we still run our permissive entity
+    // decoder to catch common broken patterns observed in the wild (e.g. `&/#47;` for `/`).
+    let href = decode_html_entities(link.href.trim());
     if debug {
       eprintln!(
         "[css] found <link>: href={href} rel={:?} media={:?}",
