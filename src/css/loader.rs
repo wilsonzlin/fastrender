@@ -1517,6 +1517,8 @@ fn extract_css_links_without_dom(
   base_url: &str,
   media_type: crate::style::media::MediaType,
 ) -> std::result::Result<Vec<String>, RenderError> {
+  let html = crate::html::strip_template_contents(html);
+  let html = html.as_ref();
   let mut css_urls = Vec::new();
   let toggles = runtime::runtime_toggles();
   let debug = toggles.truthy("FASTR_LOG_CSS_LINKS");
@@ -1771,6 +1773,8 @@ pub(crate) fn extract_embedded_css_urls_with_meta(
   base_url: &str,
   max_candidates_hint: Option<usize>,
 ) -> std::result::Result<EmbeddedCssUrlDiscovery, RenderError> {
+  let html = crate::html::strip_template_contents(html);
+  let html = html.as_ref();
   let runtime_cap = embedded_css_max_candidates();
   let max_candidates = match max_candidates_hint {
     Some(hint) => runtime_cap.min(hint),
@@ -2024,7 +2028,7 @@ pub fn extract_embedded_css_urls(
 }
 
 pub(crate) fn html_has_inline_style_tag(html: &str) -> bool {
-  find_tag_case_insensitive(html, "style", false).is_some()
+  crate::html::find_tag_case_insensitive_outside_templates(html, "style", false).is_some()
 }
 
 pub(crate) fn should_scan_embedded_css_urls(
@@ -2047,13 +2051,17 @@ pub fn dedupe_links_preserving_order(mut links: Vec<String>) -> Vec<String> {
 pub fn inject_css_into_html(html: &str, css: &str) -> String {
   let style_tag = format!("<style>{css}</style>");
 
-  if let Some(head_end) = find_tag_case_insensitive(html, "head", true) {
+  if let Some(head_end) =
+    crate::html::find_tag_case_insensitive_outside_templates(html, "head", true)
+  {
     let mut result = String::with_capacity(html.len() + style_tag.len());
     result.push_str(&html[..head_end]);
     result.push_str(&style_tag);
     result.push_str(&html[head_end..]);
     result
-  } else if let Some(body_start) = find_tag_case_insensitive(html, "body", false) {
+  } else if let Some(body_start) =
+    crate::html::find_tag_case_insensitive_outside_templates(html, "body", false)
+  {
     let mut result = String::with_capacity(html.len() + style_tag.len());
     result.push_str(&html[..body_start]);
     result.push_str(&style_tag);
@@ -2062,71 +2070,6 @@ pub fn inject_css_into_html(html: &str, css: &str) -> String {
   } else {
     format!("{style_tag}{html}")
   }
-}
-
-fn find_tag_case_insensitive(html: &str, tag: &str, closing: bool) -> Option<usize> {
-  find_tag_case_insensitive_from(html, tag, closing, 0)
-}
-
-fn find_tag_case_insensitive_from(
-  html: &str,
-  tag: &str,
-  closing: bool,
-  mut search_from: usize,
-) -> Option<usize> {
-  debug_assert!(tag.as_bytes().iter().all(|b| !b.is_ascii_uppercase()));
-
-  let bytes = html.as_bytes();
-  let tag_bytes = tag.as_bytes();
-
-  while search_from < bytes.len() {
-    let rel = bytes[search_from..].iter().position(|b| *b == b'<')?;
-    let start = search_from + rel;
-    let mut pos = start + 1;
-
-    while pos < bytes.len() && bytes[pos].is_ascii_whitespace() {
-      pos += 1;
-    }
-
-    if closing {
-      if pos >= bytes.len() || bytes[pos] != b'/' {
-        search_from = start + 1;
-        continue;
-      }
-      pos += 1;
-      while pos < bytes.len() && bytes[pos].is_ascii_whitespace() {
-        pos += 1;
-      }
-    }
-
-    if pos + tag_bytes.len() > bytes.len() {
-      break;
-    }
-
-    let mut matched = true;
-    for (idx, expected) in tag_bytes.iter().enumerate() {
-      if bytes[pos + idx].to_ascii_lowercase() != *expected {
-        matched = false;
-        break;
-      }
-    }
-
-    if matched {
-      let after = pos + tag_bytes.len();
-      if after >= bytes.len() {
-        return Some(start);
-      }
-
-      let next = bytes[after];
-      if next == b'>' || next == b'/' || next.is_ascii_whitespace() {
-        return Some(start);
-      }
-    }
-
-    search_from = start + 1;
-  }
-
-  None
 }
 
 /// Infer a reasonable base URL for the document.
@@ -2291,7 +2234,9 @@ fn infer_document_url_guess_from_dom_with_input<'a>(
       // for document-level hints, ignore matches that follow a foreign sibling so those relocated
       // tokens cannot poison the inferred URL.
       if !prev_sibling_foreign
-        && node.tag_name().is_some_and(|tag| tag.eq_ignore_ascii_case("link"))
+        && node
+          .tag_name()
+          .is_some_and(|tag| tag.eq_ignore_ascii_case("link"))
         && is_html
       {
         if let Some(rel) = node.get_attribute_ref("rel") {
@@ -2341,7 +2286,9 @@ fn infer_document_url_guess_from_dom_with_input<'a>(
       }
 
       if !prev_sibling_foreign
-        && node.tag_name().is_some_and(|tag| tag.eq_ignore_ascii_case("meta"))
+        && node
+          .tag_name()
+          .is_some_and(|tag| tag.eq_ignore_ascii_case("meta"))
         && is_html
       {
         if node
@@ -2792,6 +2739,17 @@ mod tests {
   }
 
   #[test]
+  fn extract_css_links_without_dom_ignores_stylesheets_inside_template() {
+    let html = r#"
+      <template><link rel="stylesheet" href="/bad.css"></template>
+      <link rel="stylesheet" href="/good.css">
+    "#;
+    let urls =
+      extract_css_links_without_dom(html, "https://example.com/", MediaType::Screen).unwrap();
+    assert_eq!(urls, vec!["https://example.com/good.css".to_string()]);
+  }
+
+  #[test]
   fn extract_css_links_ignores_stylesheets_inside_svg() {
     let html = r#"
             <head>
@@ -2876,6 +2834,32 @@ mod tests {
     let urls = extract_embedded_css_urls(html, "https://example.com/app/").unwrap();
     assert!(urls.contains(&"https://example.com/app/assets/site.css?v=1".to_string()));
     assert!(urls.contains(&"https://example.com/shared/base.css".to_string()));
+  }
+
+  #[test]
+  fn embedded_css_scan_ignores_urls_inside_template() {
+    let html = r#"
+      <template><script>var cssUrl="bad.css";</script></template>
+      <script>var cssUrl="good.css";</script>
+    "#;
+    let urls = extract_embedded_css_urls(html, "https://example.com/").unwrap();
+    assert_eq!(urls, vec!["https://example.com/good.css".to_string()]);
+  }
+
+  #[test]
+  fn should_scan_embedded_css_urls_ignores_inline_style_inside_template() {
+    let html = r#"<template><style>body { color: red; }</style></template><div></div>"#;
+    assert!(should_scan_embedded_css_urls(html, false, 1));
+  }
+
+  #[test]
+  fn inject_css_into_html_ignores_head_tags_inside_template() {
+    let html = "<html><head><template></head></template></head><body></body></html>";
+    let injected = inject_css_into_html(html, "body{color:red}");
+    assert_eq!(
+      injected,
+      "<html><head><template></head></template><style>body{color:red}</style></head><body></body></html>"
+    );
   }
 
   #[test]

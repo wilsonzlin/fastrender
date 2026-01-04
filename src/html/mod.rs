@@ -147,7 +147,10 @@ pub(crate) fn strip_template_contents(html: &str) -> Cow<'_, str> {
     }
 
     // Markup declarations / processing instructions (`<!doctype ...>`, `<?xml ...?>`, etc.)
-    if bytes.get(tag_start + 1).is_some_and(|b| *b == b'!' || *b == b'?') {
+    if bytes
+      .get(tag_start + 1)
+      .is_some_and(|b| *b == b'!' || *b == b'?')
+    {
       i = find_tag_end(bytes, tag_start);
       continue;
     }
@@ -157,7 +160,8 @@ pub(crate) fn strip_template_contents(html: &str) -> Cow<'_, str> {
       break;
     }
 
-    let Some((is_end, name_start, name_end)) = parse_tag_name_range(bytes, tag_start, tag_end) else {
+    let Some((is_end, name_start, name_end)) = parse_tag_name_range(bytes, tag_start, tag_end)
+    else {
       i = tag_start + 1;
       continue;
     };
@@ -193,7 +197,9 @@ pub(crate) fn strip_template_contents(html: &str) -> Cow<'_, str> {
         if template_depth > 0 {
           template_depth -= 1;
           if template_depth == 0 {
-            let buf = out.as_mut().expect("closing template without output buffer");
+            let buf = out
+              .as_mut()
+              .expect("closing template without output buffer");
             buf.push_str(&html[tag_start..tag_end]);
             copy_from = tag_end;
           }
@@ -309,6 +315,118 @@ pub fn document_base_url(dom: &DomNode, document_url: Option<&str>) -> Option<St
   }
 
   document_url.map(|url| url.to_string())
+}
+
+/// Find the start index of the first matching tag outside inert `<template>` contents.
+///
+/// This is a best-effort scanner used by tooling/string-based HTML helpers. It is intentionally
+/// conservative: it treats raw-text elements (`<script>`, `<style>`, `<textarea>`, `<title>`,
+/// `<xmp>`, and `<plaintext>`) as opaque so markup-like text inside them cannot spoof tag matches.
+pub(crate) fn find_tag_case_insensitive_outside_templates(
+  html: &str,
+  tag: &str,
+  closing: bool,
+) -> Option<usize> {
+  debug_assert!(!tag.is_empty());
+  let bytes = html.as_bytes();
+  let tag_bytes = tag.as_bytes();
+  let mut template_depth: usize = 0;
+  let mut i: usize = 0;
+
+  while let Some(rel) = memchr(b'<', &bytes[i..]) {
+    let tag_start = i + rel;
+
+    if bytes
+      .get(tag_start..tag_start + 4)
+      .is_some_and(|head| head == b"<!--")
+    {
+      let end = find_bytes(bytes, tag_start + 4, b"-->")
+        .map(|pos| pos + 3)
+        .unwrap_or(bytes.len());
+      i = end;
+      continue;
+    }
+
+    if bytes
+      .get(tag_start..tag_start + 9)
+      .is_some_and(|head| head.eq_ignore_ascii_case(b"<![cdata["))
+    {
+      let end = find_bytes(bytes, tag_start + 9, b"]]>")
+        .map(|pos| pos + 3)
+        .unwrap_or(bytes.len());
+      i = end;
+      continue;
+    }
+
+    if bytes
+      .get(tag_start + 1)
+      .is_some_and(|b| *b == b'!' || *b == b'?')
+    {
+      i = find_tag_end(bytes, tag_start);
+      continue;
+    }
+
+    let tag_end = find_tag_end(bytes, tag_start);
+    if tag_end == bytes.len() {
+      break;
+    }
+
+    let Some((is_end, name_start, name_end)) = parse_tag_name_range(bytes, tag_start, tag_end)
+    else {
+      i = tag_start + 1;
+      continue;
+    };
+    let name = &bytes[name_start..name_end];
+
+    let raw_text_tag: Option<&'static [u8]> = if !is_end && name.eq_ignore_ascii_case(b"script") {
+      Some(b"script")
+    } else if !is_end && name.eq_ignore_ascii_case(b"style") {
+      Some(b"style")
+    } else if !is_end && name.eq_ignore_ascii_case(b"textarea") {
+      Some(b"textarea")
+    } else if !is_end && name.eq_ignore_ascii_case(b"title") {
+      Some(b"title")
+    } else if !is_end && name.eq_ignore_ascii_case(b"xmp") {
+      Some(b"xmp")
+    } else {
+      None
+    };
+
+    if !is_end && name.eq_ignore_ascii_case(b"plaintext") {
+      break;
+    }
+
+    // Only search for target tags in the main document tree.
+    if template_depth == 0
+      && is_end == closing
+      && name.eq_ignore_ascii_case(tag_bytes)
+      && !bytes
+        .get(name_end)
+        .map(|b| is_tag_name_char(*b))
+        .unwrap_or(false)
+    {
+      return Some(tag_start);
+    }
+
+    if name.eq_ignore_ascii_case(b"template") {
+      if is_end {
+        if template_depth > 0 {
+          template_depth -= 1;
+        }
+      } else {
+        template_depth += 1;
+      }
+    }
+
+    if let Some(tag) = raw_text_tag {
+      i = find_raw_text_element_end(bytes, tag_end, tag);
+      continue;
+    }
+
+    i = tag_end;
+  }
+
+  None
 }
 
 #[cfg(test)]
