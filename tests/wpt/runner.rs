@@ -1261,6 +1261,11 @@ impl WptRunner {
     };
 
     let should_match = metadata.reftest_expectation != ReftestExpectation::Mismatch;
+    let can_update_expected = config.update_expected
+      && should_match
+      && !metadata
+        .expected_status
+        .is_some_and(|status| status != TestStatus::Pass);
     let matches_expectation = if should_match {
       comparison.is_match(config.max_diff_percentage)
     } else {
@@ -1277,7 +1282,7 @@ impl WptRunner {
       return result;
     }
 
-    if config.update_expected && should_match {
+    if can_update_expected {
       let expected_path = Self::get_expected_image_path(config, metadata);
       if let Err(err) = Self::save_expected_image(&expected_path, &rendered) {
         return TestResult::error(
@@ -2074,5 +2079,34 @@ test_type = "reftest"
       .load_manifest(&manifest_path, temp.path())
       .expect("manifest should load");
     assert_eq!(entries[0].reftest_expectation, ReftestExpectation::Mismatch);
+  }
+
+  #[test]
+  fn update_expected_does_not_break_expected_fail_overrides() {
+    let renderer = create_test_renderer();
+    let mut runner = WptRunner::new(renderer);
+
+    let temp = TempDir::new().unwrap();
+    runner.config_mut().test_dir = temp.path().to_path_buf();
+    runner.config_mut().expected_dir = temp.path().join("expected");
+    runner.config_mut().output_dir = temp.path().join("out");
+    runner.config_mut().update_expected = true;
+
+    // Use a `*-ref.html` file name so it's excluded from test discovery.
+    std::fs::write(
+      temp.path().join("test.html"),
+      r#"<!doctype html><link rel="match" href="test-ref.html"><style>html,body{margin:0;width:32px;height:32px}body{background:rgb(200,0,0)}</style>"#,
+    )
+    .unwrap();
+    std::fs::write(
+      temp.path().join("test-ref.html"),
+      r#"<!doctype html><style>html,body{margin:0;width:32px;height:32px}body{background:rgb(0,0,200)}</style>"#,
+    )
+    .unwrap();
+    std::fs::write(temp.path().join("test.html.ini"), "expected: FAIL\n").unwrap();
+
+    let results = runner.run_suite(temp.path());
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].status, TestStatus::Pass);
   }
 }
