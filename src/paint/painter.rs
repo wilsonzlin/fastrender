@@ -7544,7 +7544,8 @@ impl Painter {
     style: &ComputedStyle,
   ) -> Option<f32> {
     match thickness {
-      TextDecorationThickness::Auto | TextDecorationThickness::FromFont => None,
+      TextDecorationThickness::Auto => Some((style.font_size * 0.05).max(1.0) * self.scale),
+      TextDecorationThickness::FromFont => None,
       TextDecorationThickness::Length(l) => {
         if l.unit == LengthUnit::Percent {
           Some(l.resolve_against(style.font_size).unwrap_or(0.0) * self.scale)
@@ -13151,6 +13152,7 @@ mod tests {
   use crate::style::types::OutlineStyle;
   use crate::style::types::Overflow;
   use crate::style::types::ShapeRadius;
+  use crate::style::types::TextDecorationThickness;
   use crate::style::types::TransformBox;
   use crate::style::values::Length;
   use crate::style::ComputedStyle;
@@ -14266,6 +14268,28 @@ mod tests {
       "green should stay low (got {})",
       pixel.green()
     );
+  }
+
+  #[test]
+  fn text_decoration_thickness_auto_uses_ua_default_in_legacy_painter() {
+    let painter = Painter::with_resources_scaled(
+      10,
+      10,
+      Rgba::WHITE,
+      FontContext::new(),
+      ImageCache::new(),
+      2.0,
+    )
+    .expect("painter");
+    let mut style = ComputedStyle::default();
+    style.font_size = 10.0;
+    let auto_thickness = painter
+      .resolve_decoration_thickness_value(TextDecorationThickness::Auto, &style)
+      .expect("auto thickness");
+    assert!((auto_thickness - 2.0).abs() < 0.0001);
+    assert!(painter
+      .resolve_decoration_thickness_value(TextDecorationThickness::FromFont, &style)
+      .is_none());
   }
 
   #[test]
