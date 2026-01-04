@@ -15,6 +15,10 @@ use crate::paint::display_list::{Transform2D, Transform3D};
 use crate::scroll::ScrollState;
 use crate::style::inline_axis_is_horizontal;
 use crate::style::properties::apply_declaration_with_base;
+use crate::style::types::AnimationDirection;
+use crate::style::types::AnimationFillMode;
+use crate::style::types::AnimationIterationCount;
+use crate::style::types::AnimationPlayState;
 use crate::style::types::AnimationRange;
 use crate::style::types::AnimationTimeline;
 use crate::style::types::BackgroundPosition;
@@ -1850,6 +1854,141 @@ fn pick<'a, T: Clone>(list: &'a [T], idx: usize, default: T) -> T {
     .unwrap_or_else(|| list.last().cloned().unwrap_or(default))
 }
 
+fn fill_backwards(fill: AnimationFillMode) -> bool {
+  matches!(fill, AnimationFillMode::Backwards | AnimationFillMode::Both)
+}
+
+fn fill_forwards(fill: AnimationFillMode) -> bool {
+  matches!(fill, AnimationFillMode::Forwards | AnimationFillMode::Both)
+}
+
+fn iteration_reverses(direction: AnimationDirection, iteration: u64) -> bool {
+  match direction {
+    AnimationDirection::Normal => false,
+    AnimationDirection::Reverse => true,
+    AnimationDirection::Alternate => iteration % 2 == 1,
+    AnimationDirection::AlternateReverse => iteration % 2 == 0,
+  }
+}
+
+fn animation_end_progress(direction: AnimationDirection, iterations: f32) -> f32 {
+  if !iterations.is_finite() {
+    return 0.0;
+  }
+  let iterations = iterations.max(0.0);
+  let reversed_start = iteration_reverses(direction, 0);
+  if iterations <= 0.0 {
+    return if reversed_start { 1.0 } else { 0.0 };
+  }
+
+  let whole = iterations.floor();
+  let frac = (iterations - whole).clamp(0.0, 1.0);
+  if frac <= f32::EPSILON {
+    let last_iteration = (whole.max(1.0) as u64).saturating_sub(1);
+    let reversed = iteration_reverses(direction, last_iteration);
+    if reversed {
+      0.0
+    } else {
+      1.0
+    }
+  } else {
+    let iteration = whole as u64;
+    let reversed = iteration_reverses(direction, iteration);
+    if reversed {
+      1.0 - frac
+    } else {
+      frac
+    }
+  }
+}
+
+fn time_based_animation_progress(style: &ComputedStyle, idx: usize, time_ms: f32) -> Option<f32> {
+  if time_ms < 0.0 {
+    return None;
+  }
+
+  let duration = pick(&style.animation_durations, idx, 0.0).max(0.0);
+  let delay = pick(&style.animation_delays, idx, 0.0);
+  let timing = pick(
+    &style.animation_timing_functions,
+    idx,
+    TransitionTimingFunction::Ease,
+  );
+  let iteration_count = pick(
+    &style.animation_iteration_counts,
+    idx,
+    AnimationIterationCount::default(),
+  );
+  let direction = pick(
+    &style.animation_directions,
+    idx,
+    AnimationDirection::default(),
+  );
+  let fill = pick(
+    &style.animation_fill_modes,
+    idx,
+    AnimationFillMode::default(),
+  );
+  let play_state = pick(
+    &style.animation_play_states,
+    idx,
+    AnimationPlayState::default(),
+  );
+
+  let effective_time_ms = match play_state {
+    AnimationPlayState::Running => time_ms,
+    AnimationPlayState::Paused => 0.0,
+  };
+
+  let local_time = effective_time_ms - delay;
+  let iterations = iteration_count.as_f32();
+  let active_duration = if duration <= 0.0 {
+    0.0
+  } else if iterations.is_infinite() {
+    f32::INFINITY
+  } else {
+    duration * iterations.max(0.0)
+  };
+
+  let start_progress = if iteration_reverses(direction, 0) {
+    1.0
+  } else {
+    0.0
+  };
+  let end_progress = animation_end_progress(direction, iterations);
+
+  if local_time < 0.0 {
+    return if fill_backwards(fill) {
+      Some(timing.value_at(start_progress))
+    } else {
+      None
+    };
+  }
+
+  if active_duration.is_finite() && local_time >= active_duration {
+    return if fill_forwards(fill) {
+      Some(timing.value_at(end_progress))
+    } else {
+      None
+    };
+  }
+
+  if duration <= 0.0 {
+    return Some(timing.value_at(end_progress));
+  }
+
+  let total = (local_time / duration).max(0.0);
+  let iteration = total.floor() as u64;
+  let iteration_progress = (total - iteration as f32).clamp(0.0, 1.0);
+  let reversed = iteration_reverses(direction, iteration);
+  let directed = if reversed {
+    1.0 - iteration_progress
+  } else {
+    iteration_progress
+  };
+  Some(timing.value_at(directed))
+}
+
 struct TimelineScrollContext {
   scroll: Point,
   viewport: Size,
@@ -1982,7 +2121,7 @@ fn apply_animations_to_node(
   viewport: Rect,
   keyframes: &HashMap<String, KeyframesRule>,
   timelines: &HashMap<String, TimelineState>,
-  time_progress: Option<f32>,
+  animation_time_ms: Option<f32>,
 ) {
   if let Some(style_arc) = node.style.clone() {
     let names = &style_arc.animation_names;
@@ -1997,7 +2136,8 @@ fn apply_animations_to_node(
         let timeline_ref = pick(timelines_list, idx, AnimationTimeline::Auto);
         let range = pick(ranges_list, idx, AnimationRange::default());
         let progress = match timeline_ref {
-          AnimationTimeline::Auto => time_progress,
+          AnimationTimeline::Auto => animation_time_ms
+            .and_then(|time_ms| time_based_animation_progress(&*style_arc, idx, time_ms)),
           AnimationTimeline::None => None,
           AnimationTimeline::Named(ref timeline_name) => {
             timelines.get(timeline_name).map(|state| match state {
@@ -2057,16 +2197,9 @@ fn apply_animations_to_node(
       viewport,
       keyframes,
       timelines,
-      time_progress,
+      animation_time_ms,
     );
   }
-}
-
-fn normalize_time_progress(time: Duration) -> f32 {
-  // Without full CSS animation timing support, treat the provided timestamp as
-  // a position along a 1s default timeline so tests and call sites can drive
-  // animation sampling deterministically.
-  (time.as_secs_f64().fract()) as f32
 }
 
 /// Applies scroll/view timeline-driven animations to the fragment tree by sampling
@@ -2074,7 +2207,8 @@ fn normalize_time_progress(time: Duration) -> f32 {
 ///
 /// This is a lightweight hook to make scroll-driven effects visible without a full
 /// animation engine. It uses the provided scroll state for viewport and element scroll offsets.
-/// Time-based animations use a normalized 0–1 progress derived from the provided [`Duration`].
+/// Time-based animations sample at the provided timestamp, honoring per-animation
+/// duration/delay/iteration-count/direction/fill-mode/play-state.
 pub fn apply_animations(
   tree: &mut FragmentTree,
   scroll_state: &ScrollState,
@@ -2084,7 +2218,7 @@ pub fn apply_animations(
     return;
   }
 
-  let time_progress = animation_time.map(normalize_time_progress);
+  let animation_time_ms = animation_time.map(|time| time.as_secs_f32() * 1000.0);
   let viewport = Rect::from_xywh(
     0.0,
     0.0,
@@ -2120,7 +2254,7 @@ pub fn apply_animations(
     viewport,
     &tree.keyframes,
     &timelines,
-    time_progress,
+    animation_time_ms,
   );
   for frag in &mut tree.additional_fragments {
     let offset = Point::new(frag.bounds.x(), frag.bounds.y());
@@ -2130,7 +2264,7 @@ pub fn apply_animations(
       viewport,
       &tree.keyframes,
       &timelines,
-      time_progress,
+      animation_time_ms,
     );
   }
 }
@@ -2309,5 +2443,196 @@ impl AnimationRangeExt for AnimationRange {
 
   fn end(&self) -> &RangeOffset {
     &self.end
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::css::parser::parse_stylesheet;
+  use crate::image_output::{encode_image, OutputFormat};
+  use crate::style::media::MediaContext;
+  use crate::{FastRender, RenderOptions, ResourcePolicy};
+  use image::ImageFormat;
+  use std::fs;
+  use std::path::{Path, PathBuf};
+  use url::Url;
+
+  fn fade_rule() -> KeyframesRule {
+    let sheet =
+      parse_stylesheet("@keyframes fade { 0% { opacity: 0; } 100% { opacity: 1; } }").unwrap();
+    let keyframes = sheet.collect_keyframes(&MediaContext::screen(800.0, 600.0));
+    keyframes[0].clone()
+  }
+
+  fn sampled_opacity(rule: &KeyframesRule, progress: f32) -> f32 {
+    let values = sample_keyframes(
+      rule,
+      progress,
+      &ComputedStyle::default(),
+      Size::new(800.0, 600.0),
+      Size::new(100.0, 100.0),
+    );
+    match values.get("opacity") {
+      Some(AnimatedValue::Opacity(v)) => *v,
+      other => panic!("expected opacity, got {other:?}"),
+    }
+  }
+
+  #[test]
+  fn time_based_animation_fill_forwards_applies_after_end() {
+    let rule = fade_rule();
+    let mut style = ComputedStyle::default();
+    style.animation_names = vec!["fade".to_string()];
+    style.animation_durations = vec![1000.0].into();
+    style.animation_delays = vec![500.0].into();
+    style.animation_timing_functions = vec![TransitionTimingFunction::Linear].into();
+    style.animation_fill_modes = vec![AnimationFillMode::Forwards].into();
+
+    assert_eq!(time_based_animation_progress(&style, 0, 0.0), None);
+
+    let progress = time_based_animation_progress(&style, 0, 2500.0).expect("filled");
+    assert!((progress - 1.0).abs() < 1e-6);
+    assert!((sampled_opacity(&rule, progress) - 1.0).abs() < 1e-6);
+  }
+
+  #[test]
+  fn time_based_animation_fill_backwards_respects_reverse_direction() {
+    let rule = fade_rule();
+    let mut style = ComputedStyle::default();
+    style.animation_names = vec!["fade".to_string()];
+    style.animation_durations = vec![1000.0].into();
+    style.animation_delays = vec![500.0].into();
+    style.animation_timing_functions = vec![TransitionTimingFunction::Linear].into();
+    style.animation_fill_modes = vec![AnimationFillMode::Backwards].into();
+    style.animation_directions = vec![AnimationDirection::Reverse].into();
+
+    let progress = time_based_animation_progress(&style, 0, 0.0).expect("filled");
+    assert!((progress - 1.0).abs() < 1e-6, "progress={progress}");
+    assert!((sampled_opacity(&rule, progress) - 1.0).abs() < 1e-6);
+  }
+
+  #[test]
+  fn time_based_animation_alternate_ends_on_start_state() {
+    let rule = fade_rule();
+    let mut style = ComputedStyle::default();
+    style.animation_names = vec!["fade".to_string()];
+    style.animation_durations = vec![1000.0].into();
+    style.animation_iteration_counts = vec![AnimationIterationCount::Count(2.0)].into();
+    style.animation_directions = vec![AnimationDirection::Alternate].into();
+    style.animation_fill_modes = vec![AnimationFillMode::Forwards].into();
+    style.animation_timing_functions = vec![TransitionTimingFunction::Linear].into();
+
+    let progress = time_based_animation_progress(&style, 0, 2500.0).expect("filled");
+    assert!((progress - 0.0).abs() < 1e-6, "progress={progress}");
+    assert!((sampled_opacity(&rule, progress) - 0.0).abs() < 1e-6);
+  }
+
+  #[test]
+  fn time_based_animation_paused_samples_at_start_time() {
+    let rule = fade_rule();
+    let mut style = ComputedStyle::default();
+    style.animation_names = vec!["fade".to_string()];
+    style.animation_durations = vec![1000.0].into();
+    style.animation_timing_functions = vec![TransitionTimingFunction::Linear].into();
+    style.animation_play_states = vec![AnimationPlayState::Paused].into();
+
+    let progress = time_based_animation_progress(&style, 0, 500.0).expect("active");
+    assert!((progress - 0.0).abs() < 1e-6, "progress={progress}");
+    assert!((sampled_opacity(&rule, progress) - 0.0).abs() < 1e-6);
+  }
+
+  fn decode_png(bytes: &[u8]) -> image::RgbaImage {
+    image::load_from_memory_with_format(bytes, ImageFormat::Png)
+      .expect("decode png")
+      .to_rgba8()
+  }
+
+  fn assert_png_eq(actual: &[u8], expected: &[u8]) {
+    let actual = decode_png(actual);
+    let expected = decode_png(expected);
+    assert_eq!(
+      actual.dimensions(),
+      expected.dimensions(),
+      "png dimensions mismatch"
+    );
+    assert_eq!(actual.as_raw(), expected.as_raw(), "png pixels mismatch");
+  }
+
+  fn should_update_animation_sampling_goldens() -> bool {
+    std::env::var("UPDATE_ANIMATION_TIME_SAMPLING_GOLDEN").is_ok()
+  }
+
+  fn render_animation_sampling_fixture(html: &str, base_url: String, time_ms: f32) -> Vec<u8> {
+    let policy = ResourcePolicy::default()
+      .allow_http(false)
+      .allow_https(false)
+      .allow_file(true)
+      .allow_data(true);
+    let mut renderer = FastRender::builder()
+      .base_url(base_url)
+      .resource_policy(policy)
+      .build()
+      .expect("renderer");
+    let options = RenderOptions::new()
+      .with_viewport(200, 200)
+      .with_animation_time(time_ms);
+    let pixmap = renderer
+      .render_html_with_options(html, options)
+      .expect("render fixture");
+    encode_image(&pixmap, OutputFormat::Png).expect("encode png")
+  }
+
+  #[test]
+  fn animation_time_sampling_fixture_matches_golden() {
+    let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = repo_root.join("tests/pages/fixtures/animation_time_sampling/index.html");
+    let html = fs::read_to_string(&fixture_path).unwrap_or_else(|e| panic!("read fixture: {e}"));
+    let base_url = Url::from_directory_path(
+      fixture_path
+        .parent()
+        .expect("fixture directory should have parent"),
+    )
+    .expect("fixture base url")
+    .to_string();
+
+    let golden_dir = repo_root.join("tests/pages/golden");
+    let outputs = [
+      (0.0_f32, "animation_time_sampling_t0.png"),
+      (1500.0_f32, "animation_time_sampling_t1500.png"),
+    ];
+
+    for (time_ms, golden_name) in outputs {
+      let rendered = render_animation_sampling_fixture(&html, base_url.clone(), time_ms);
+      let golden_path = golden_dir.join(golden_name);
+      if should_update_animation_sampling_goldens() {
+        fs::create_dir_all(&golden_dir)
+          .unwrap_or_else(|e| panic!("Failed to create golden dir {}: {e}", golden_dir.display()));
+        fs::write(&golden_path, &rendered).unwrap_or_else(|e| {
+          panic!(
+            "Failed to write golden {} ({}): {e}",
+            golden_name,
+            golden_path.display()
+          )
+        });
+        continue;
+      }
+
+      let golden = fs::read(&golden_path).unwrap_or_else(|e| {
+        panic!(
+          "Missing golden {} ({}): {e}",
+          golden_name,
+          golden_path.display()
+        )
+      });
+      assert_png_eq(&rendered, &golden);
+
+      // Sanity-check the golden itself is a PNG to make failure messages clearer when the file is
+      // missing/corrupt.
+      assert_eq!(
+        Path::new(golden_name).extension().and_then(|s| s.to_str()),
+        Some("png")
+      );
+    }
   }
 }

@@ -1,0 +1,42 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>animation_time_sampling</title>
+<style>
+  html,
+  body {
+    margin: 0;
+    width: 100%;
+    height: 100%;
+    background: #fff;
+  }
+
+  #box {
+    position: absolute;
+    left: 60px;
+    top: 60px;
+    width: 80px;
+    height: 80px;
+    background: rgb(200, 0, 0);
+
+    /* Underlying style (should be visible before delay since fill-mode is forwards-only). */
+    opacity: 0;
+    transform: translateX(-120px);
+
+    /* Exercise animation shorthand parsing + time sampling. */
+    animation: enter 1s linear 0.5s 1 normal forwards;
+  }
+
+  @keyframes enter {
+    from {
+      opacity: 0;
+      transform: translateX(-120px);
+    }
+
+    to {
+      opacity: 1;
+      transform: translateX(0px);
+    }
+  }
+</style>
+
+<div id="box"></div>

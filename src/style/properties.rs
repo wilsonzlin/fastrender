@@ -1151,17 +1151,30 @@ fn parse_animation_timeline_list(raw: &str) -> Vec<AnimationTimeline> {
 
 fn parse_animation_names(raw: &str) -> Vec<String> {
   let mut names = Vec::new();
-  for part in raw.split(',') {
-    let trimmed = part.trim();
-    if trimmed.is_empty() {
+  for part in split_top_level_commas(raw) {
+    let mut input = ParserInput::new(part.trim());
+    let mut parser = Parser::new(&mut input);
+    parser.skip_whitespace();
+    let token = match parser.next_including_whitespace() {
+      Ok(token) => token,
+      Err(_) => continue,
+    };
+    let name = match token {
+      Token::Ident(ident) => ident.to_string(),
+      Token::QuotedString(s) => s.to_string(),
+      _ => continue,
+    };
+    parser.skip_whitespace();
+    if !parser.is_exhausted() {
       continue;
     }
-    if trimmed.eq_ignore_ascii_case("none") {
-      return Vec::new();
-    }
-    names.push(trimmed.to_string());
+    names.push(name);
   }
-  names
+  if names.len() == 1 && names[0].eq_ignore_ascii_case("none") {
+    Vec::new()
+  } else {
+    names
+  }
 }
 
 fn parse_range_offset(tokens: &[&str]) -> Option<(RangeOffset, usize)> {
@@ -1247,6 +1260,134 @@ fn parse_time_ms(raw: &str) -> Option<f32> {
     return Some(0.0);
   }
   None
+}
+
+fn parse_animation_duration_list(raw: &str) -> Vec<f32> {
+  let mut times = Vec::new();
+  for part in split_top_level_commas(raw) {
+    if let Some(ms) = parse_time_ms(&part) {
+      times.push(ms.max(0.0));
+    }
+  }
+  if times.is_empty() {
+    vec![0.0]
+  } else {
+    times
+  }
+}
+
+fn parse_animation_delay_list(raw: &str) -> Vec<f32> {
+  let mut times = Vec::new();
+  for part in split_top_level_commas(raw) {
+    if let Some(ms) = parse_time_ms(&part) {
+      times.push(ms);
+    }
+  }
+  if times.is_empty() {
+    vec![0.0]
+  } else {
+    times
+  }
+}
+
+fn parse_animation_iteration_count(raw: &str) -> Option<AnimationIterationCount> {
+  let trimmed = raw.trim();
+  if trimmed.is_empty() {
+    return None;
+  }
+  if trimmed.eq_ignore_ascii_case("infinite") {
+    return Some(AnimationIterationCount::Infinite);
+  }
+  let value = trimmed.parse::<f32>().ok()?;
+  if value.is_finite() && value >= 0.0 {
+    Some(AnimationIterationCount::Count(value))
+  } else {
+    None
+  }
+}
+
+fn parse_animation_iteration_count_list(raw: &str) -> Vec<AnimationIterationCount> {
+  let mut counts = Vec::new();
+  for part in split_top_level_commas(raw) {
+    if let Some(count) = parse_animation_iteration_count(&part) {
+      counts.push(count);
+    }
+  }
+  if counts.is_empty() {
+    vec![AnimationIterationCount::default()]
+  } else {
+    counts
+  }
+}
+
+fn parse_animation_direction(raw: &str) -> Option<AnimationDirection> {
+  match raw.trim().to_ascii_lowercase().as_str() {
+    "normal" => Some(AnimationDirection::Normal),
+    "reverse" => Some(AnimationDirection::Reverse),
+    "alternate" => Some(AnimationDirection::Alternate),
+    "alternate-reverse" => Some(AnimationDirection::AlternateReverse),
+    _ => None,
+  }
+}
+
+fn parse_animation_direction_list(raw: &str) -> Vec<AnimationDirection> {
+  let mut dirs = Vec::new();
+  for part in split_top_level_commas(raw) {
+    if let Some(dir) = parse_animation_direction(&part) {
+      dirs.push(dir);
+    }
+  }
+  if dirs.is_empty() {
+    vec![AnimationDirection::default()]
+  } else {
+    dirs
+  }
+}
+
+fn parse_animation_fill_mode(raw: &str) -> Option<AnimationFillMode> {
+  match raw.trim().to_ascii_lowercase().as_str() {
+    "none" => Some(AnimationFillMode::None),
+    "forwards" => Some(AnimationFillMode::Forwards),
+    "backwards" => Some(AnimationFillMode::Backwards),
+    "both" => Some(AnimationFillMode::Both),
+    _ => None,
+  }
+}
+
+fn parse_animation_fill_mode_list(raw: &str) -> Vec<AnimationFillMode> {
+  let mut modes = Vec::new();
+  for part in split_top_level_commas(raw) {
+    if let Some(mode) = parse_animation_fill_mode(&part) {
+      modes.push(mode);
+    }
+  }
+  if modes.is_empty() {
+    vec![AnimationFillMode::default()]
+  } else {
+    modes
+  }
+}
+
+fn parse_animation_play_state(raw: &str) -> Option<AnimationPlayState> {
+  match raw.trim().to_ascii_lowercase().as_str() {
+    "running" => Some(AnimationPlayState::Running),
+    "paused" => Some(AnimationPlayState::Paused),
+    _ => None,
+  }
+}
+
+fn parse_animation_play_state_list(raw: &str) -> Vec<AnimationPlayState> {
+  let mut states = Vec::new();
+  for part in split_top_level_commas(raw) {
+    if let Some(state) = parse_animation_play_state(&part) {
+      states.push(state);
+    }
+  }
+  if states.is_empty() {
+    vec![AnimationPlayState::default()]
+  } else {
+    states
+  }
 }
 
 fn parse_transition_property_list(raw: &str) -> Vec<TransitionProperty> {
@@ -1345,6 +1486,211 @@ fn parse_transition_timing_function_list(raw: &str) -> Vec<TransitionTimingFunct
   } else {
     funcs
   }
+}
+
+fn parse_animation_shorthand(
+  raw: &str,
+) -> Option<(
+  Vec<String>,
+  Vec<f32>,
+  Vec<f32>,
+  Vec<TransitionTimingFunction>,
+  Vec<AnimationIterationCount>,
+  Vec<AnimationDirection>,
+  Vec<AnimationFillMode>,
+  Vec<AnimationPlayState>,
+)> {
+  let mut names = Vec::new();
+  let mut durations = Vec::new();
+  let mut delays = Vec::new();
+  let mut timings = Vec::new();
+  let mut iterations = Vec::new();
+  let mut directions = Vec::new();
+  let mut fills = Vec::new();
+  let mut play_states = Vec::new();
+
+  let mut saw_any = false;
+
+  for part in split_top_level_commas(raw) {
+    let mut name: Option<String> = None;
+    let mut duration: Option<f32> = None;
+    let mut delay: Option<f32> = None;
+    let mut timing: Option<TransitionTimingFunction> = None;
+    let mut iteration: Option<AnimationIterationCount> = None;
+    let mut direction: Option<AnimationDirection> = None;
+    let mut fill_mode: Option<AnimationFillMode> = None;
+    let mut play_state: Option<AnimationPlayState> = None;
+
+    let mut input = ParserInput::new(part.as_str());
+    let mut parser = Parser::new(&mut input);
+    let mut invalid = false;
+
+    while !parser.is_exhausted() {
+      parser.skip_whitespace();
+      if parser.is_exhausted() {
+        break;
+      }
+      let token = match parser.next_including_whitespace() {
+        Ok(token) => token,
+        Err(_) => {
+          invalid = true;
+          break;
+        }
+      };
+      let token_text = token.to_css_string();
+
+      if let Some(ms) = parse_time_ms(&token_text) {
+        if duration.is_none() {
+          duration = Some(ms.max(0.0));
+        } else if delay.is_none() {
+          delay = Some(ms);
+        } else {
+          invalid = true;
+          break;
+        }
+        continue;
+      }
+
+      if timing.is_none() {
+        if let Some(tf) = parse_transition_timing_function(&token_text) {
+          timing = Some(tf);
+          continue;
+        }
+        if let Token::Function(name) = &token {
+          let func_name = name.to_string();
+          if let Some(tf) = parse_transition_timing_function(func_name.as_str()) {
+            timing = Some(tf);
+            continue;
+          }
+          if func_name.eq_ignore_ascii_case("cubic-bezier")
+            || func_name.eq_ignore_ascii_case("steps")
+          {
+            if let Some(tf) = parse_transition_timing_function(&token_text) {
+              timing = Some(tf);
+              continue;
+            }
+          }
+        }
+      } else if parse_transition_timing_function(&token_text).is_some() {
+        invalid = true;
+        break;
+      }
+
+      if iteration.is_none() {
+        if let Some(count) = parse_animation_iteration_count(&token_text) {
+          iteration = Some(count);
+          continue;
+        }
+      } else if parse_animation_iteration_count(&token_text).is_some() {
+        invalid = true;
+        break;
+      }
+
+      if direction.is_none() {
+        if let Some(dir) = parse_animation_direction(&token_text) {
+          direction = Some(dir);
+          continue;
+        }
+      } else if parse_animation_direction(&token_text).is_some() {
+        invalid = true;
+        break;
+      }
+
+      let lower = token_text.to_ascii_lowercase();
+      if lower == "none" {
+        if name.is_none() {
+          name = Some(match token {
+            Token::Ident(id) => id.to_string(),
+            Token::QuotedString(s) => s.to_string(),
+            _ => "none".to_string(),
+          });
+          continue;
+        }
+        if fill_mode.is_none() {
+          fill_mode = Some(AnimationFillMode::None);
+          continue;
+        }
+        invalid = true;
+        break;
+      }
+
+      if fill_mode.is_none() {
+        if let Some(fill) = parse_animation_fill_mode(&token_text) {
+          fill_mode = Some(fill);
+          continue;
+        }
+      } else if parse_animation_fill_mode(&token_text).is_some() {
+        invalid = true;
+        break;
+      }
+
+      if play_state.is_none() {
+        if let Some(state) = parse_animation_play_state(&token_text) {
+          play_state = Some(state);
+          continue;
+        }
+      } else if parse_animation_play_state(&token_text).is_some() {
+        invalid = true;
+        break;
+      }
+
+      match token {
+        Token::Ident(ident) => {
+          if name.is_none() {
+            name = Some(ident.to_string());
+          } else {
+            invalid = true;
+            break;
+          }
+        }
+        Token::QuotedString(s) => {
+          if name.is_none() {
+            name = Some(s.to_string());
+          } else {
+            invalid = true;
+            break;
+          }
+        }
+        _ => {
+          invalid = true;
+          break;
+        }
+      }
+    }
+
+    if invalid {
+      continue;
+    }
+
+    saw_any = true;
+    names.push(name.unwrap_or_else(|| "none".to_string()));
+    durations.push(duration.unwrap_or(0.0));
+    delays.push(delay.unwrap_or(0.0));
+    timings.push(timing.unwrap_or(TransitionTimingFunction::Ease));
+    iterations.push(iteration.unwrap_or_default());
+    directions.push(direction.unwrap_or_default());
+    fills.push(fill_mode.unwrap_or_default());
+    play_states.push(play_state.unwrap_or_default());
+  }
+
+  if !saw_any {
+    return None;
+  }
+
+  if names.len() == 1 && names[0].eq_ignore_ascii_case("none") {
+    names.clear();
+  }
+
+  Some((
+    names,
+    durations,
+    delays,
+    timings,
+    iterations,
+    directions,
+    fills,
+    play_states,
+  ))
 }
 
 fn parse_transition_shorthand(
@@ -3542,6 +3888,27 @@ fn apply_property_from_source(
     "animation-timeline" => styles.animation_timelines = source.animation_timelines.clone(),
     "animation-range" => styles.animation_ranges = source.animation_ranges.clone(),
     "animation-name" => styles.animation_names = source.animation_names.clone(),
+    "animation-duration" => styles.animation_durations = source.animation_durations.clone(),
+    "animation-delay" => styles.animation_delays = source.animation_delays.clone(),
+    "animation-timing-function" => {
+      styles.animation_timing_functions = source.animation_timing_functions.clone()
+    }
+    "animation-iteration-count" => {
+      styles.animation_iteration_counts = source.animation_iteration_counts.clone()
+    }
+    "animation-direction" => styles.animation_directions = source.animation_directions.clone(),
+    "animation-fill-mode" => styles.animation_fill_modes = source.animation_fill_modes.clone(),
+    "animation-play-state" => styles.animation_play_states = source.animation_play_states.clone(),
+    "animation" => {
+      styles.animation_names = source.animation_names.clone();
+      styles.animation_durations = source.animation_durations.clone();
+      styles.animation_delays = source.animation_delays.clone();
+      styles.animation_timing_functions = source.animation_timing_functions.clone();
+      styles.animation_iteration_counts = source.animation_iteration_counts.clone();
+      styles.animation_directions = source.animation_directions.clone();
+      styles.animation_fill_modes = source.animation_fill_modes.clone();
+      styles.animation_play_states = source.animation_play_states.clone();
+    }
     "scroll-padding" => {
       styles.scroll_padding_top = source.scroll_padding_top;
       styles.scroll_padding_right = source.scroll_padding_right;
@@ -4663,6 +5030,15 @@ fn apply_declaration_with_base_internal(
     "page-break-before" => "break-before",
     "page-break-after" => "break-after",
     "page-break-inside" => "break-inside",
+    "-webkit-animation" => "animation",
+    "-webkit-animation-name" => "animation-name",
+    "-webkit-animation-duration" => "animation-duration",
+    "-webkit-animation-delay" => "animation-delay",
+    "-webkit-animation-timing-function" => "animation-timing-function",
+    "-webkit-animation-iteration-count" => "animation-iteration-count",
+    "-webkit-animation-direction" => "animation-direction",
+    "-webkit-animation-fill-mode" => "animation-fill-mode",
+    "-webkit-animation-play-state" => "animation-play-state",
     other => other,
   };
 
@@ -4672,7 +5048,15 @@ fn apply_declaration_with_base_internal(
       | "view-timeline"
       | "animation-timeline"
       | "animation-range"
+      | "animation"
       | "animation-name"
+      | "animation-duration"
+      | "animation-delay"
+      | "animation-timing-function"
+      | "animation-iteration-count"
+      | "animation-direction"
+      | "animation-fill-mode"
+      | "animation-play-state"
       | "transition-property"
       | "transition-duration"
       | "transition-delay"
@@ -8139,9 +8523,52 @@ fn apply_declaration_with_base_internal(
       let css_text = declaration_css_text_str(decl, resolved_css_text.as_ref());
       styles.animation_ranges = parse_animation_range_list(css_text);
     }
-    "animation-name" => {
+    "animation-name" | "-webkit-animation-name" => {
       let css_text = declaration_css_text_str(decl, resolved_css_text.as_ref());
       styles.animation_names = parse_animation_names(css_text);
+    }
+    "animation-duration" | "-webkit-animation-duration" => {
+      let css_text = declaration_css_text_str(decl, resolved_css_text.as_ref());
+      styles.animation_durations = parse_animation_duration_list(css_text).into();
+    }
+    "animation-delay" | "-webkit-animation-delay" => {
+      let css_text = declaration_css_text_str(decl, resolved_css_text.as_ref());
+      styles.animation_delays = parse_animation_delay_list(css_text).into();
+    }
+    "animation-timing-function" | "-webkit-animation-timing-function" => {
+      let css_text = declaration_css_text_str(decl, resolved_css_text.as_ref());
+      styles.animation_timing_functions = parse_transition_timing_function_list(css_text).into();
+    }
+    "animation-iteration-count" | "-webkit-animation-iteration-count" => {
+      let css_text = declaration_css_text_str(decl, resolved_css_text.as_ref());
+      styles.animation_iteration_counts = parse_animation_iteration_count_list(css_text).into();
+    }
+    "animation-direction" | "-webkit-animation-direction" => {
+      let css_text = declaration_css_text_str(decl, resolved_css_text.as_ref());
+      styles.animation_directions = parse_animation_direction_list(css_text).into();
+    }
+    "animation-fill-mode" | "-webkit-animation-fill-mode" => {
+      let css_text = declaration_css_text_str(decl, resolved_css_text.as_ref());
+      styles.animation_fill_modes = parse_animation_fill_mode_list(css_text).into();
+    }
+    "animation-play-state" | "-webkit-animation-play-state" => {
+      let css_text = declaration_css_text_str(decl, resolved_css_text.as_ref());
+      styles.animation_play_states = parse_animation_play_state_list(css_text).into();
+    }
+    "animation" | "-webkit-animation" => {
+      let css_text = declaration_css_text_str(decl, resolved_css_text.as_ref());
+      if let Some((names, durations, delays, timings, iterations, directions, fills, play_states)) =
+        parse_animation_shorthand(css_text)
+      {
+        styles.animation_names = names;
+        styles.animation_durations = durations.into();
+        styles.animation_delays = delays.into();
+        styles.animation_timing_functions = timings.into();
+        styles.animation_iteration_counts = iterations.into();
+        styles.animation_directions = directions.into();
+        styles.animation_fill_modes = fills.into();
+        styles.animation_play_states = play_states.into();
+      }
     }
     "transition-property" => {
       let css_text = declaration_css_text_str(decl, resolved_css_text.as_ref());
@@ -13959,6 +14386,70 @@ mod tests {
     assert_eq!(
       styles.animation_names,
       vec!["fade".to_string(), "slide".to_string()]
+    );
+  }
+
+  #[test]
+  fn animation_shorthand_declaration_is_raw_keyword_and_applies() {
+    let decls =
+      parse_declarations("animation: fade 2s linear 1s 3 reverse forwards paused, slide 1s;");
+    assert_eq!(decls.len(), 1);
+    let decl = &decls[0];
+    assert_eq!(decl.property.as_str(), "animation");
+    assert!(decl.raw_value.is_empty());
+    match &decl.value {
+      PropertyValue::Keyword(raw) => {
+        assert_eq!(raw, "fade 2s linear 1s 3 reverse forwards paused, slide 1s")
+      }
+      other => panic!("expected keyword, got {:?}", other),
+    }
+
+    let parent_styles = ComputedStyle::default();
+    let mut styles = ComputedStyle::default();
+    apply_declaration_with_base(
+      &mut styles,
+      decl,
+      &parent_styles,
+      default_computed_style(),
+      None,
+      16.0,
+      16.0,
+      DEFAULT_VIEWPORT,
+    );
+
+    assert_eq!(
+      styles.animation_names,
+      vec!["fade".to_string(), "slide".to_string()]
+    );
+    assert_eq!(styles.animation_durations, vec![2000.0, 1000.0].into());
+    assert_eq!(styles.animation_delays, vec![1000.0, 0.0].into());
+    assert_eq!(
+      styles.animation_timing_functions,
+      vec![
+        TransitionTimingFunction::Linear,
+        TransitionTimingFunction::Ease
+      ]
+      .into()
+    );
+    assert_eq!(
+      styles.animation_iteration_counts,
+      vec![
+        AnimationIterationCount::Count(3.0),
+        AnimationIterationCount::Count(1.0)
+      ]
+      .into()
+    );
+    assert_eq!(
+      styles.animation_directions,
+      vec![AnimationDirection::Reverse, AnimationDirection::Normal].into()
+    );
+    assert_eq!(
+      styles.animation_fill_modes,
+      vec![AnimationFillMode::Forwards, AnimationFillMode::None].into()
+    );
+    assert_eq!(
+      styles.animation_play_states,
+      vec![AnimationPlayState::Paused, AnimationPlayState::Running].into()
     );
   }
 

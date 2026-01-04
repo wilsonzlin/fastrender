@@ -1049,6 +1049,71 @@ impl Default for AnimationRange {
   }
 }
 
+/// CSS `animation-direction`
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnimationDirection {
+  Normal,
+  Reverse,
+  Alternate,
+  AlternateReverse,
+}
+
+impl Default for AnimationDirection {
+  fn default() -> Self {
+    AnimationDirection::Normal
+  }
+}
+
+/// CSS `animation-fill-mode`
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnimationFillMode {
+  None,
+  Forwards,
+  Backwards,
+  Both,
+}
+
+impl Default for AnimationFillMode {
+  fn default() -> Self {
+    AnimationFillMode::None
+  }
+}
+
+/// CSS `animation-play-state`
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnimationPlayState {
+  Running,
+  Paused,
+}
+
+impl Default for AnimationPlayState {
+  fn default() -> Self {
+    AnimationPlayState::Running
+  }
+}
+
+/// CSS `animation-iteration-count`
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum AnimationIterationCount {
+  Count(f32),
+  Infinite,
+}
+
+impl Default for AnimationIterationCount {
+  fn default() -> Self {
+    AnimationIterationCount::Count(1.0)
+  }
+}
+
+impl AnimationIterationCount {
+  pub fn as_f32(self) -> f32 {
+    match self {
+      AnimationIterationCount::Count(v) => v,
+      AnimationIterationCount::Infinite => f32::INFINITY,
+    }
+  }
+}
+
 /// Property list entry for CSS transitions.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TransitionProperty {

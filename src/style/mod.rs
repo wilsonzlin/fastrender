@@ -51,6 +51,10 @@ use types::AccentColor;
 use types::AlignContent;
 use types::AlignItems;
 use types::AnimationRange;
+use types::AnimationDirection;
+use types::AnimationFillMode;
+use types::AnimationIterationCount;
+use types::AnimationPlayState;
 use types::AnimationTimeline;
 use types::Appearance;
 use types::AspectRatio;
@@ -480,6 +484,20 @@ pub struct ComputedStyle {
   pub animation_ranges: Vec<AnimationRange>,
   /// Names of animations applied to this element.
   pub animation_names: Vec<String>,
+  /// Durations for animations in milliseconds.
+  pub animation_durations: Arc<[f32]>,
+  /// Delays for animations in milliseconds.
+  pub animation_delays: Arc<[f32]>,
+  /// Timing functions used by animations.
+  pub animation_timing_functions: Arc<[TransitionTimingFunction]>,
+  /// Iteration counts for animations.
+  pub animation_iteration_counts: Arc<[AnimationIterationCount]>,
+  /// Playback directions for animations.
+  pub animation_directions: Arc<[AnimationDirection]>,
+  /// Fill modes for animations.
+  pub animation_fill_modes: Arc<[AnimationFillMode]>,
+  /// Play-state for animations.
+  pub animation_play_states: Arc<[AnimationPlayState]>,
   /// Properties that participate in transitions (empty disables transitions).
   pub transition_properties: Arc<[TransitionProperty]>,
   /// Durations for transitions in milliseconds.
@@ -846,6 +864,13 @@ impl Default for ComputedStyle {
       animation_timelines: Vec::new(),
       animation_ranges: Vec::new(),
       animation_names: Vec::new(),
+      animation_durations: vec![0.0].into(),
+      animation_delays: vec![0.0].into(),
+      animation_timing_functions: vec![TransitionTimingFunction::Ease].into(),
+      animation_iteration_counts: vec![AnimationIterationCount::default()].into(),
+      animation_directions: vec![AnimationDirection::default()].into(),
+      animation_fill_modes: vec![AnimationFillMode::default()].into(),
+      animation_play_states: vec![AnimationPlayState::default()].into(),
       transition_properties: vec![TransitionProperty::All].into(),
       transition_durations: vec![0.0].into(),
       transition_delays: vec![0.0].into(),

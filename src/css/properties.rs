@@ -44,7 +44,24 @@ pub(crate) fn is_raw_only_property(property: &str) -> bool {
       | "view-timeline"
       | "animation-timeline"
       | "animation-range"
+      | "animation"
       | "animation-name"
+      | "animation-duration"
+      | "animation-timing-function"
+      | "animation-delay"
+      | "animation-iteration-count"
+      | "animation-direction"
+      | "animation-fill-mode"
+      | "animation-play-state"
+      | "-webkit-animation"
+      | "-webkit-animation-name"
+      | "-webkit-animation-duration"
+      | "-webkit-animation-timing-function"
+      | "-webkit-animation-delay"
+      | "-webkit-animation-iteration-count"
+      | "-webkit-animation-direction"
+      | "-webkit-animation-fill-mode"
+      | "-webkit-animation-play-state"
       | "transition-property"
       | "transition-duration"
       | "transition-delay"
@@ -63,9 +80,26 @@ const KNOWN_STYLE_PROPERTIES: &[&str] = &[
   "align-items",
   "align-self",
   "all",
+  "animation",
+  "animation-delay",
+  "animation-direction",
+  "animation-duration",
+  "animation-fill-mode",
+  "animation-iteration-count",
   "animation-name",
+  "animation-play-state",
   "animation-range",
+  "animation-timing-function",
   "animation-timeline",
+  "-webkit-animation",
+  "-webkit-animation-delay",
+  "-webkit-animation-direction",
+  "-webkit-animation-duration",
+  "-webkit-animation-fill-mode",
+  "-webkit-animation-iteration-count",
+  "-webkit-animation-name",
+  "-webkit-animation-play-state",
+  "-webkit-animation-timing-function",
   "aspect-ratio",
   "backdrop-filter",
   "appearance",
