@@ -4658,7 +4658,7 @@ impl DisplayListRenderer {
       else {
         combined = Some(match combined.take() {
           Some(existing) => {
-            match apply_mask_composite(existing, CompositeMask::Transparent, layer.composite) {
+            match apply_mask_composite(existing, CompositeMask::Transparent, layer.composite)? {
               Some(mask) => mask,
               None => return Ok(None),
             }
@@ -4670,7 +4670,7 @@ impl DisplayListRenderer {
       if clip_rect_css.width() <= 0.0 || clip_rect_css.height() <= 0.0 {
         combined = Some(match combined.take() {
           Some(existing) => {
-            match apply_mask_composite(existing, CompositeMask::Transparent, layer.composite) {
+            match apply_mask_composite(existing, CompositeMask::Transparent, layer.composite)? {
               Some(mask) => mask,
               None => return Ok(None),
             }
@@ -4758,7 +4758,7 @@ impl DisplayListRenderer {
       if positions_x.count == 0 || positions_y.count == 0 {
         combined = Some(match combined.take() {
           Some(existing) => {
-            match apply_mask_composite(existing, CompositeMask::Transparent, layer.composite) {
+            match apply_mask_composite(existing, CompositeMask::Transparent, layer.composite)? {
               Some(mask) => mask,
               None => return Ok(None),
             }
@@ -4878,7 +4878,7 @@ impl DisplayListRenderer {
       if region_w == 0 || region_h == 0 {
         combined = Some(match combined.take() {
           Some(existing) => {
-            match apply_mask_composite(existing, CompositeMask::Transparent, layer.composite) {
+            match apply_mask_composite(existing, CompositeMask::Transparent, layer.composite)? {
               Some(mask) => mask,
               None => return Ok(None),
             }
@@ -4972,7 +4972,7 @@ impl DisplayListRenderer {
       });
 
       combined = Some(match combined.take() {
-        Some(existing) => match apply_mask_composite(existing, layer_mask, layer.composite) {
+        Some(existing) => match apply_mask_composite(existing, layer_mask, layer.composite)? {
           Some(mask) => mask,
           None => return Ok(None),
         },
@@ -9552,18 +9552,18 @@ fn apply_mask_composite(
   dest: CompositeMask,
   src: CompositeMask,
   op: MaskComposite,
-) -> Option<CompositeMask> {
+) -> RenderResult<Option<CompositeMask>> {
   use CompositeMask::*;
 
   match (dest, src) {
-    (Transparent, Transparent) => Some(Transparent),
+    (Transparent, Transparent) => Ok(Some(Transparent)),
     (Transparent, Region(mask)) => match op {
-      MaskComposite::Intersect => Some(Transparent),
-      MaskComposite::Add | MaskComposite::Subtract | MaskComposite::Exclude => Some(Region(mask)),
+      MaskComposite::Intersect => Ok(Some(Transparent)),
+      MaskComposite::Add | MaskComposite::Subtract | MaskComposite::Exclude => Ok(Some(Region(mask))),
     },
     (Region(mask), Transparent) => match op {
-      MaskComposite::Add | MaskComposite::Exclude => Some(Region(mask)),
-      MaskComposite::Subtract | MaskComposite::Intersect => Some(Transparent),
+      MaskComposite::Add | MaskComposite::Exclude => Ok(Some(Region(mask))),
+      MaskComposite::Subtract | MaskComposite::Intersect => Ok(Some(Transparent)),
     },
     (Region(dest), Region(src)) => composite_offset_masks(dest, src, op),
   }
@@ -9573,7 +9573,7 @@ fn composite_offset_masks(
   mut dest: OffsetMask,
   mut src: OffsetMask,
   op: MaskComposite,
-) -> Option<CompositeMask> {
+) -> RenderResult<Option<CompositeMask>> {
   let dx0 = dest.origin.0;
   let dy0 = dest.origin.1;
   let dx1 = dx0 + dest.mask.width() as i32;
@@ -9588,8 +9588,8 @@ fn composite_offset_masks(
     && dest.mask.width() == src.mask.width()
     && dest.mask.height() == src.mask.height()
   {
-    apply_mask_composite_same_bounds(dest.mask.data_mut(), src.mask.data(), op);
-    return Some(CompositeMask::Region(dest));
+    apply_mask_composite_same_bounds(dest.mask.data_mut(), src.mask.data(), op)?;
+    return Ok(Some(CompositeMask::Region(dest)));
   }
 
   let (ox0, oy0, ox1, oy1) = match op {
@@ -9604,9 +9604,9 @@ fn composite_offset_masks(
           &dest,
           op,
           (inter_x0, inter_y0, inter_x1, inter_y1),
-        );
+        )?;
       }
-      return Some(CompositeMask::Region(src));
+      return Ok(Some(CompositeMask::Region(src)));
     }
     MaskComposite::Intersect => {
       let contains =
@@ -9614,12 +9614,12 @@ fn composite_offset_masks(
           ax0 <= bx0 && ay0 <= by0 && ax1 >= bx1 && ay1 >= by1
         };
       if contains(dx0, dy0, dx1, dy1, sx0, sy0, sx1, sy1) {
-        apply_mask_composite_into_src(&mut src, &dest, op, (sx0, sy0, sx1, sy1));
-        return Some(CompositeMask::Region(src));
+        apply_mask_composite_into_src(&mut src, &dest, op, (sx0, sy0, sx1, sy1))?;
+        return Ok(Some(CompositeMask::Region(src)));
       }
       if contains(sx0, sy0, sx1, sy1, dx0, dy0, dx1, dy1) {
-        apply_mask_composite_into_dest(&mut dest, &src, op, (dx0, dy0, dx1, dy1));
-        return Some(CompositeMask::Region(dest));
+        apply_mask_composite_into_dest(&mut dest, &src, op, (dx0, dy0, dx1, dy1))?;
+        return Ok(Some(CompositeMask::Region(dest)));
       }
 
       (dx0.max(sx0), dy0.max(sy0), dx1.min(sx1), dy1.min(sy1))
@@ -9630,12 +9630,12 @@ fn composite_offset_masks(
           ax0 <= bx0 && ay0 <= by0 && ax1 >= bx1 && ay1 >= by1
         };
       if contains(dx0, dy0, dx1, dy1, sx0, sy0, sx1, sy1) {
-        apply_mask_composite_into_dest(&mut dest, &src, op, (sx0, sy0, sx1, sy1));
-        return Some(CompositeMask::Region(dest));
+        apply_mask_composite_into_dest(&mut dest, &src, op, (sx0, sy0, sx1, sy1))?;
+        return Ok(Some(CompositeMask::Region(dest)));
       }
       if contains(sx0, sy0, sx1, sy1, dx0, dy0, dx1, dy1) {
-        apply_mask_composite_into_src(&mut src, &dest, op, (dx0, dy0, dx1, dy1));
-        return Some(CompositeMask::Region(src));
+        apply_mask_composite_into_src(&mut src, &dest, op, (dx0, dy0, dx1, dy1))?;
+        return Ok(Some(CompositeMask::Region(src)));
       }
 
       (dx0.min(sx0), dy0.min(sy0), dx1.max(sx1), dy1.max(sy1))
@@ -9645,12 +9645,14 @@ fn composite_offset_masks(
   let out_w_i32 = ox1.saturating_sub(ox0);
   let out_h_i32 = oy1.saturating_sub(oy0);
   if out_w_i32 <= 0 || out_h_i32 <= 0 {
-    return Some(CompositeMask::Transparent);
+    return Ok(Some(CompositeMask::Transparent));
   }
   let out_w = out_w_i32 as u32;
   let out_h = out_h_i32 as u32;
 
-  let mut out = Mask::new(out_w, out_h)?;
+  let Some(mut out) = Mask::new(out_w, out_h) else {
+    return Ok(None);
+  };
   let out_data = out.data_mut();
 
   let dst_w = dest.mask.width() as usize;
@@ -9662,15 +9664,21 @@ fn composite_offset_masks(
     MaskComposite::Intersect => {
       let dst_x_offset = ox0.saturating_sub(dx0) as usize;
       let src_x_offset = ox0.saturating_sub(sx0) as usize;
+      let mut deadline_counter = 0usize;
       for y in 0..out_h as usize {
         let global_y = oy0 + y as i32;
         let dst_row_idx = global_y.saturating_sub(dy0) as usize * dst_w;
         let src_row_idx = global_y.saturating_sub(sy0) as usize * src_w;
         let out_row_idx = y * out_w as usize;
-        for x in 0..out_w as usize {
-          let dst = dst_data[dst_row_idx + dst_x_offset + x] as u16;
-          let src = src_data[src_row_idx + src_x_offset + x] as u16;
-          out_data[out_row_idx + x] = div_255(src * dst) as u8;
+        let row_len = out_w as usize;
+        for x0 in (0..row_len).step_by(CLIP_MASK_DEADLINE_STRIDE) {
+          check_active_periodic(&mut deadline_counter, 1, RenderStage::Paint)?;
+          let x1 = (x0 + CLIP_MASK_DEADLINE_STRIDE).min(row_len);
+          for x in x0..x1 {
+            let dst = dst_data[dst_row_idx + dst_x_offset + x] as u16;
+            let src = src_data[src_row_idx + src_x_offset + x] as u16;
+            out_data[out_row_idx + x] = div_255(src * dst) as u8;
+          }
         }
       }
     }
@@ -9679,6 +9687,7 @@ fn composite_offset_masks(
       let dst_y1 = dy1;
       let dst_x0 = dx0;
       let dst_x1 = dx1;
+      let mut deadline_counter = 0usize;
       for y in 0..out_h as usize {
         let global_y = oy0 + y as i32;
         let src_row_idx = y * src_w;
@@ -9689,23 +9698,29 @@ fn composite_offset_masks(
         } else {
           None
         };
-        for x in 0..out_w as usize {
-          let global_x = ox0 + x as i32;
-          let src = src_data[src_row_idx + x] as u16;
-          let dst = if let Some(row) = dst_row {
-            if global_x >= dst_x0 && global_x < dst_x1 {
-              row[(global_x - dst_x0) as usize] as u16
+        let row_len = out_w as usize;
+        for x0 in (0..row_len).step_by(CLIP_MASK_DEADLINE_STRIDE) {
+          check_active_periodic(&mut deadline_counter, 1, RenderStage::Paint)?;
+          let x1 = (x0 + CLIP_MASK_DEADLINE_STRIDE).min(row_len);
+          for x in x0..x1 {
+            let global_x = ox0 + x as i32;
+            let src = src_data[src_row_idx + x] as u16;
+            let dst = if let Some(row) = dst_row {
+              if global_x >= dst_x0 && global_x < dst_x1 {
+                row[(global_x - dst_x0) as usize] as u16
+              } else {
+                0
+              }
             } else {
               0
-            }
-          } else {
-            0
-          };
-          out_data[out_row_idx + x] = div_255(src * (255 - dst)) as u8;
+            };
+            out_data[out_row_idx + x] = div_255(src * (255 - dst)) as u8;
+          }
         }
       }
     }
     MaskComposite::Add | MaskComposite::Exclude => {
+      let mut deadline_counter = 0usize;
       for y in 0..out_h as usize {
         let global_y = oy0 + y as i32;
         let out_row_idx = y * out_w as usize;
@@ -9723,82 +9738,118 @@ fn composite_offset_masks(
           None
         };
 
-        for x in 0..out_w as usize {
-          let global_x = ox0 + x as i32;
-          let dst = if let Some(row) = dst_row {
-            if global_x >= dx0 && global_x < dx1 {
-              row[(global_x - dx0) as usize] as u16
+        let row_len = out_w as usize;
+        for x0 in (0..row_len).step_by(CLIP_MASK_DEADLINE_STRIDE) {
+          check_active_periodic(&mut deadline_counter, 1, RenderStage::Paint)?;
+          let x1 = (x0 + CLIP_MASK_DEADLINE_STRIDE).min(row_len);
+          for x in x0..x1 {
+            let global_x = ox0 + x as i32;
+            let dst = if let Some(row) = dst_row {
+              if global_x >= dx0 && global_x < dx1 {
+                row[(global_x - dx0) as usize] as u16
+              } else {
+                0
+              }
             } else {
               0
-            }
-          } else {
-            0
-          };
-          let src = if let Some(row) = src_row {
-            if global_x >= sx0 && global_x < sx1 {
-              row[(global_x - sx0) as usize] as u16
+            };
+            let src = if let Some(row) = src_row {
+              if global_x >= sx0 && global_x < sx1 {
+                row[(global_x - sx0) as usize] as u16
+              } else {
+                0
+              }
             } else {
               0
-            }
-          } else {
-            0
-          };
+            };
 
-          let out = match op {
-            MaskComposite::Add => src + div_255(dst * (255 - src)),
-            MaskComposite::Exclude => {
-              let src_out = div_255(src * (255 - dst));
-              let dst_out = div_255(dst * (255 - src));
-              src_out + dst_out
-            }
-            _ => 0,
-          };
-          out_data[out_row_idx + x] = out.min(255) as u8;
+            let out = match op {
+              MaskComposite::Add => src + div_255(dst * (255 - src)),
+              MaskComposite::Exclude => {
+                let src_out = div_255(src * (255 - dst));
+                let dst_out = div_255(dst * (255 - src));
+                src_out + dst_out
+              }
+              _ => 0,
+            };
+            out_data[out_row_idx + x] = out.min(255) as u8;
+          }
         }
       }
     }
   }
 
-  Some(CompositeMask::Region(OffsetMask {
+  Ok(Some(CompositeMask::Region(OffsetMask {
     mask: out,
     origin: (ox0, oy0),
-  }))
+  })))
 }
 
-fn apply_mask_composite_same_bounds(dest: &mut [u8], src: &[u8], op: MaskComposite) {
+fn apply_mask_composite_same_bounds(
+  dest: &mut [u8],
+  src: &[u8],
+  op: MaskComposite,
+) -> RenderResult<()> {
+  debug_assert_eq!(dest.len(), src.len());
+  let mut deadline_counter = 0usize;
   match op {
     MaskComposite::Add => {
-      for (d, s) in dest.iter_mut().zip(src.iter()) {
-        let src = *s as u16;
-        let dst = *d as u16;
-        let out = src + div_255(dst * (255 - src));
-        *d = out.min(255) as u8;
+      for (dest_chunk, src_chunk) in dest
+        .chunks_mut(CLIP_MASK_DEADLINE_STRIDE)
+        .zip(src.chunks(CLIP_MASK_DEADLINE_STRIDE))
+      {
+        check_active_periodic(&mut deadline_counter, 1, RenderStage::Paint)?;
+        for (d, s) in dest_chunk.iter_mut().zip(src_chunk.iter()) {
+          let src = *s as u16;
+          let dst = *d as u16;
+          let out = src + div_255(dst * (255 - src));
+          *d = out.min(255) as u8;
+        }
       }
     }
     MaskComposite::Subtract => {
-      for (d, s) in dest.iter_mut().zip(src.iter()) {
-        let src = *s as u16;
-        let dst = *d as u16;
-        *d = div_255(src * (255 - dst)) as u8;
+      for (dest_chunk, src_chunk) in dest
+        .chunks_mut(CLIP_MASK_DEADLINE_STRIDE)
+        .zip(src.chunks(CLIP_MASK_DEADLINE_STRIDE))
+      {
+        check_active_periodic(&mut deadline_counter, 1, RenderStage::Paint)?;
+        for (d, s) in dest_chunk.iter_mut().zip(src_chunk.iter()) {
+          let src = *s as u16;
+          let dst = *d as u16;
+          *d = div_255(src * (255 - dst)) as u8;
+        }
       }
     }
     MaskComposite::Intersect => {
-      for (d, s) in dest.iter_mut().zip(src.iter()) {
-        let src = *s as u16;
-        let dst = *d as u16;
-        *d = div_255(src * dst) as u8;
+      for (dest_chunk, src_chunk) in dest
+        .chunks_mut(CLIP_MASK_DEADLINE_STRIDE)
+        .zip(src.chunks(CLIP_MASK_DEADLINE_STRIDE))
+      {
+        check_active_periodic(&mut deadline_counter, 1, RenderStage::Paint)?;
+        for (d, s) in dest_chunk.iter_mut().zip(src_chunk.iter()) {
+          let src = *s as u16;
+          let dst = *d as u16;
+          *d = div_255(src * dst) as u8;
+        }
       }
     }
     MaskComposite::Exclude => {
-      for (d, s) in dest.iter_mut().zip(src.iter()) {
-        let src = *s as u16;
-        let dst = *d as u16;
-        let src_out = div_255(src * (255 - dst));
-        let dst_out = div_255(dst * (255 - src));
-        *d = (src_out + dst_out).min(255) as u8;
+      for (dest_chunk, src_chunk) in dest
+        .chunks_mut(CLIP_MASK_DEADLINE_STRIDE)
+        .zip(src.chunks(CLIP_MASK_DEADLINE_STRIDE))
+      {
+        check_active_periodic(&mut deadline_counter, 1, RenderStage::Paint)?;
+        for (d, s) in dest_chunk.iter_mut().zip(src_chunk.iter()) {
+          let src = *s as u16;
+          let dst = *d as u16;
+          let src_out = div_255(src * (255 - dst));
+          let dst_out = div_255(dst * (255 - src));
+          *d = (src_out + dst_out).min(255) as u8;
+        }
       }
     }
   }
+  Ok(())
 }
 
 fn apply_mask_composite_into_src(
@@ -9806,27 +9857,35 @@ fn apply_mask_composite_into_src(
   dest: &OffsetMask,
   op: MaskComposite,
   (ox0, oy0, ox1, oy1): (i32, i32, i32, i32),
-) {
+) -> RenderResult<()> {
   let out_w = src.mask.width() as usize;
   let dst_w = dest.mask.width() as usize;
   let out_data = src.mask.data_mut();
   let dst_data = dest.mask.data();
+  let x_span = ox1.saturating_sub(ox0).max(0) as usize;
+  let src_x0 = (ox0 - src.origin.0).max(0) as usize;
+  let dst_x0 = (ox0 - dest.origin.0).max(0) as usize;
+  let mut deadline_counter = 0usize;
 
   match op {
     MaskComposite::Add => {
       for y in oy0..oy1 {
         let out_y = (y - src.origin.1) as usize;
         let dst_y = (y - dest.origin.1) as usize;
-        let out_row = out_y * out_w;
-        let dst_row = dst_y * dst_w;
-        for x in ox0..ox1 {
-          let out_x = (x - src.origin.0) as usize;
-          let dst_x = (x - dest.origin.0) as usize;
-          let idx_out = out_row + out_x;
-          let dst = dst_data[dst_row + dst_x] as u16;
-          let src_v = out_data[idx_out] as u16;
-          let out = src_v + div_255(dst * (255 - src_v));
-          out_data[idx_out] = out.min(255) as u8;
+        let out_row = out_y * out_w + src_x0;
+        let dst_row = dst_y * dst_w + dst_x0;
+        let mut x = 0usize;
+        while x < x_span {
+          check_active_periodic(&mut deadline_counter, 1, RenderStage::Paint)?;
+          let x_end = (x + CLIP_MASK_DEADLINE_STRIDE).min(x_span);
+          for i in x..x_end {
+            let idx_out = out_row + i;
+            let dst = dst_data[dst_row + i] as u16;
+            let src_v = out_data[idx_out] as u16;
+            let out = src_v + div_255(dst * (255 - src_v));
+            out_data[idx_out] = out.min(255) as u8;
+          }
+          x = x_end;
         }
       }
     }
@@ -9834,15 +9893,19 @@ fn apply_mask_composite_into_src(
       for y in oy0..oy1 {
         let out_y = (y - src.origin.1) as usize;
         let dst_y = (y - dest.origin.1) as usize;
-        let out_row = out_y * out_w;
-        let dst_row = dst_y * dst_w;
-        for x in ox0..ox1 {
-          let out_x = (x - src.origin.0) as usize;
-          let dst_x = (x - dest.origin.0) as usize;
-          let idx_out = out_row + out_x;
-          let dst = dst_data[dst_row + dst_x] as u16;
-          let src_v = out_data[idx_out] as u16;
-          out_data[idx_out] = div_255(src_v * (255 - dst)) as u8;
+        let out_row = out_y * out_w + src_x0;
+        let dst_row = dst_y * dst_w + dst_x0;
+        let mut x = 0usize;
+        while x < x_span {
+          check_active_periodic(&mut deadline_counter, 1, RenderStage::Paint)?;
+          let x_end = (x + CLIP_MASK_DEADLINE_STRIDE).min(x_span);
+          for i in x..x_end {
+            let idx_out = out_row + i;
+            let dst = dst_data[dst_row + i] as u16;
+            let src_v = out_data[idx_out] as u16;
+            out_data[idx_out] = div_255(src_v * (255 - dst)) as u8;
+          }
+          x = x_end;
         }
       }
     }
@@ -9850,15 +9913,19 @@ fn apply_mask_composite_into_src(
       for y in oy0..oy1 {
         let out_y = (y - src.origin.1) as usize;
         let dst_y = (y - dest.origin.1) as usize;
-        let out_row = out_y * out_w;
-        let dst_row = dst_y * dst_w;
-        for x in ox0..ox1 {
-          let out_x = (x - src.origin.0) as usize;
-          let dst_x = (x - dest.origin.0) as usize;
-          let idx_out = out_row + out_x;
-          let dst = dst_data[dst_row + dst_x] as u16;
-          let src_v = out_data[idx_out] as u16;
-          out_data[idx_out] = div_255(src_v * dst) as u8;
+        let out_row = out_y * out_w + src_x0;
+        let dst_row = dst_y * dst_w + dst_x0;
+        let mut x = 0usize;
+        while x < x_span {
+          check_active_periodic(&mut deadline_counter, 1, RenderStage::Paint)?;
+          let x_end = (x + CLIP_MASK_DEADLINE_STRIDE).min(x_span);
+          for i in x..x_end {
+            let idx_out = out_row + i;
+            let dst = dst_data[dst_row + i] as u16;
+            let src_v = out_data[idx_out] as u16;
+            out_data[idx_out] = div_255(src_v * dst) as u8;
+          }
+          x = x_end;
         }
       }
     }
@@ -9866,21 +9933,26 @@ fn apply_mask_composite_into_src(
       for y in oy0..oy1 {
         let out_y = (y - src.origin.1) as usize;
         let dst_y = (y - dest.origin.1) as usize;
-        let out_row = out_y * out_w;
-        let dst_row = dst_y * dst_w;
-        for x in ox0..ox1 {
-          let out_x = (x - src.origin.0) as usize;
-          let dst_x = (x - dest.origin.0) as usize;
-          let idx_out = out_row + out_x;
-          let dst = dst_data[dst_row + dst_x] as u16;
-          let src_v = out_data[idx_out] as u16;
-          let src_out = div_255(src_v * (255 - dst));
-          let dst_out = div_255(dst * (255 - src_v));
-          out_data[idx_out] = (src_out + dst_out).min(255) as u8;
+        let out_row = out_y * out_w + src_x0;
+        let dst_row = dst_y * dst_w + dst_x0;
+        let mut x = 0usize;
+        while x < x_span {
+          check_active_periodic(&mut deadline_counter, 1, RenderStage::Paint)?;
+          let x_end = (x + CLIP_MASK_DEADLINE_STRIDE).min(x_span);
+          for i in x..x_end {
+            let idx_out = out_row + i;
+            let dst = dst_data[dst_row + i] as u16;
+            let src_v = out_data[idx_out] as u16;
+            let src_out = div_255(src_v * (255 - dst));
+            let dst_out = div_255(dst * (255 - src_v));
+            out_data[idx_out] = (src_out + dst_out).min(255) as u8;
+          }
+          x = x_end;
         }
       }
     }
   }
+  Ok(())
 }
 
 fn apply_mask_composite_into_dest(
@@ -9888,27 +9960,35 @@ fn apply_mask_composite_into_dest(
   src: &OffsetMask,
   op: MaskComposite,
   (ox0, oy0, ox1, oy1): (i32, i32, i32, i32),
-) {
+) -> RenderResult<()> {
   let dst_w = dest.mask.width() as usize;
   let src_w = src.mask.width() as usize;
   let dst_data = dest.mask.data_mut();
   let src_data = src.mask.data();
+  let x_span = ox1.saturating_sub(ox0).max(0) as usize;
+  let dst_x0 = (ox0 - dest.origin.0).max(0) as usize;
+  let src_x0 = (ox0 - src.origin.0).max(0) as usize;
+  let mut deadline_counter = 0usize;
 
   match op {
     MaskComposite::Add => {
       for y in oy0..oy1 {
         let dst_y = (y - dest.origin.1) as usize;
         let src_y = (y - src.origin.1) as usize;
-        let dst_row = dst_y * dst_w;
-        let src_row = src_y * src_w;
-        for x in ox0..ox1 {
-          let dst_x = (x - dest.origin.0) as usize;
-          let src_x = (x - src.origin.0) as usize;
-          let idx_dst = dst_row + dst_x;
-          let dst = dst_data[idx_dst] as u16;
-          let src_v = src_data[src_row + src_x] as u16;
-          let out = src_v + div_255(dst * (255 - src_v));
-          dst_data[idx_dst] = out.min(255) as u8;
+        let dst_row = dst_y * dst_w + dst_x0;
+        let src_row = src_y * src_w + src_x0;
+        let mut x = 0usize;
+        while x < x_span {
+          check_active_periodic(&mut deadline_counter, 1, RenderStage::Paint)?;
+          let x_end = (x + CLIP_MASK_DEADLINE_STRIDE).min(x_span);
+          for i in x..x_end {
+            let idx_dst = dst_row + i;
+            let dst = dst_data[idx_dst] as u16;
+            let src_v = src_data[src_row + i] as u16;
+            let out = src_v + div_255(dst * (255 - src_v));
+            dst_data[idx_dst] = out.min(255) as u8;
+          }
+          x = x_end;
         }
       }
     }
@@ -9916,15 +9996,19 @@ fn apply_mask_composite_into_dest(
       for y in oy0..oy1 {
         let dst_y = (y - dest.origin.1) as usize;
         let src_y = (y - src.origin.1) as usize;
-        let dst_row = dst_y * dst_w;
-        let src_row = src_y * src_w;
-        for x in ox0..ox1 {
-          let dst_x = (x - dest.origin.0) as usize;
-          let src_x = (x - src.origin.0) as usize;
-          let idx_dst = dst_row + dst_x;
-          let dst = dst_data[idx_dst] as u16;
-          let src_v = src_data[src_row + src_x] as u16;
-          dst_data[idx_dst] = div_255(src_v * (255 - dst)) as u8;
+        let dst_row = dst_y * dst_w + dst_x0;
+        let src_row = src_y * src_w + src_x0;
+        let mut x = 0usize;
+        while x < x_span {
+          check_active_periodic(&mut deadline_counter, 1, RenderStage::Paint)?;
+          let x_end = (x + CLIP_MASK_DEADLINE_STRIDE).min(x_span);
+          for i in x..x_end {
+            let idx_dst = dst_row + i;
+            let dst = dst_data[idx_dst] as u16;
+            let src_v = src_data[src_row + i] as u16;
+            dst_data[idx_dst] = div_255(src_v * (255 - dst)) as u8;
+          }
+          x = x_end;
         }
       }
     }
@@ -9932,15 +10016,19 @@ fn apply_mask_composite_into_dest(
       for y in oy0..oy1 {
         let dst_y = (y - dest.origin.1) as usize;
         let src_y = (y - src.origin.1) as usize;
-        let dst_row = dst_y * dst_w;
-        let src_row = src_y * src_w;
-        for x in ox0..ox1 {
-          let dst_x = (x - dest.origin.0) as usize;
-          let src_x = (x - src.origin.0) as usize;
-          let idx_dst = dst_row + dst_x;
-          let dst = dst_data[idx_dst] as u16;
-          let src_v = src_data[src_row + src_x] as u16;
-          dst_data[idx_dst] = div_255(src_v * dst) as u8;
+        let dst_row = dst_y * dst_w + dst_x0;
+        let src_row = src_y * src_w + src_x0;
+        let mut x = 0usize;
+        while x < x_span {
+          check_active_periodic(&mut deadline_counter, 1, RenderStage::Paint)?;
+          let x_end = (x + CLIP_MASK_DEADLINE_STRIDE).min(x_span);
+          for i in x..x_end {
+            let idx_dst = dst_row + i;
+            let dst = dst_data[idx_dst] as u16;
+            let src_v = src_data[src_row + i] as u16;
+            dst_data[idx_dst] = div_255(src_v * dst) as u8;
+          }
+          x = x_end;
         }
       }
     }
@@ -9948,21 +10036,26 @@ fn apply_mask_composite_into_dest(
       for y in oy0..oy1 {
         let dst_y = (y - dest.origin.1) as usize;
         let src_y = (y - src.origin.1) as usize;
-        let dst_row = dst_y * dst_w;
-        let src_row = src_y * src_w;
-        for x in ox0..ox1 {
-          let dst_x = (x - dest.origin.0) as usize;
-          let src_x = (x - src.origin.0) as usize;
-          let idx_dst = dst_row + dst_x;
-          let dst = dst_data[idx_dst] as u16;
-          let src_v = src_data[src_row + src_x] as u16;
-          let src_out = div_255(src_v * (255 - dst));
-          let dst_out = div_255(dst * (255 - src_v));
-          dst_data[idx_dst] = (src_out + dst_out).min(255) as u8;
+        let dst_row = dst_y * dst_w + dst_x0;
+        let src_row = src_y * src_w + src_x0;
+        let mut x = 0usize;
+        while x < x_span {
+          check_active_periodic(&mut deadline_counter, 1, RenderStage::Paint)?;
+          let x_end = (x + CLIP_MASK_DEADLINE_STRIDE).min(x_span);
+          for i in x..x_end {
+            let idx_dst = dst_row + i;
+            let dst = dst_data[idx_dst] as u16;
+            let src_v = src_data[src_row + i] as u16;
+            let src_out = div_255(src_v * (255 - dst));
+            let dst_out = div_255(dst * (255 - src_v));
+            dst_data[idx_dst] = (src_out + dst_out).min(255) as u8;
+          }
+          x = x_end;
         }
       }
     }
   }
+  Ok(())
 }
 
 #[inline]
@@ -13903,6 +13996,67 @@ mod tests {
   }
 
   #[test]
+  fn render_mask_composite_aborts_on_expired_deadline() {
+    let mut renderer = DisplayListRenderer::new(512, 512, Rgba::WHITE, FontContext::new()).unwrap();
+
+    let bounds = Rect::from_xywh(0.0, 0.0, 512.0, 512.0);
+    let mut layer = MaskLayer::default();
+    layer.repeat = BackgroundRepeat::no_repeat();
+    layer.size = BackgroundSize::Explicit(
+      BackgroundSizeComponent::Length(Length::percent(100.0)),
+      BackgroundSizeComponent::Length(Length::percent(100.0)),
+    );
+
+    let image = ImageData::new_premultiplied(1, 1, 1.0, 1.0, vec![0, 0, 0, 255]);
+    let mask = ResolvedMask {
+      layers: vec![
+        ResolvedMaskLayer {
+          image: ResolvedMaskImage::Raster(image.clone()),
+          repeat: layer.repeat,
+          position: layer.position,
+          size: layer.size.clone(),
+          origin: layer.origin,
+          clip: layer.clip,
+          mode: layer.mode,
+          composite: MaskComposite::Add,
+        },
+        ResolvedMaskLayer {
+          image: ResolvedMaskImage::Raster(image),
+          repeat: layer.repeat,
+          position: layer.position,
+          size: layer.size,
+          origin: layer.origin,
+          clip: layer.clip,
+          mode: layer.mode,
+          composite: MaskComposite::Add,
+        },
+      ],
+      color: Rgba::BLACK,
+      font_size: 16.0,
+      root_font_size: 16.0,
+      rects: mask_rects(bounds, (0.0, 0.0, 0.0, 0.0)),
+    };
+
+    let check_calls = Arc::new(AtomicUsize::new(0));
+    let cancel_calls = check_calls.clone();
+    let cancel: Arc<CancelCallback> =
+      Arc::new(move || cancel_calls.fetch_add(1, Ordering::Relaxed) >= 1);
+    let deadline = RenderDeadline::new(None, Some(cancel));
+    let result = crate::render_control::with_deadline(Some(&deadline), || renderer.render_mask(&mask));
+
+    assert!(
+      matches!(
+        result,
+        Err(RenderError::Timeout {
+          stage: RenderStage::Paint,
+          ..
+        })
+      ),
+      "expected render_mask composite to abort with a paint timeout, got {result:?}"
+    );
+  }
+
+  #[test]
   fn tile_axis_plan_matches_legacy_tile_positions() {
     let cases = [
       (
@@ -14010,6 +14164,7 @@ mod tests {
       }),
       MaskComposite::Add,
     )
+    .expect("composite ok")
     .expect("composite");
 
     let CompositeMask::Region(composed) = result else {
@@ -14046,6 +14201,7 @@ mod tests {
       }),
       MaskComposite::Intersect,
     )
+    .expect("composite ok")
     .expect("composite");
 
     let CompositeMask::Region(composed) = result else {
@@ -14075,6 +14231,7 @@ mod tests {
       }),
       MaskComposite::Intersect,
     )
+    .expect("composite ok")
     .expect("composite");
 
     assert!(matches!(result, CompositeMask::Transparent));
@@ -14098,6 +14255,7 @@ mod tests {
       }),
       MaskComposite::Subtract,
     )
+    .expect("composite ok")
     .expect("composite");
 
     let CompositeMask::Region(composed) = result else {
@@ -14130,6 +14288,7 @@ mod tests {
       }),
       MaskComposite::Exclude,
     )
+    .expect("composite ok")
     .expect("composite");
 
     let CompositeMask::Region(composed) = result else {
