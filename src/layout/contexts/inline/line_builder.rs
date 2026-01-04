@@ -603,7 +603,11 @@ impl TextItem {
     let mut x_height: Option<f32> = None;
 
     for run in runs {
-      if let Some(scaled) = font_context.get_scaled_metrics(run.font.as_ref(), run.font_size) {
+      if let Some(scaled) = font_context.get_scaled_metrics_with_variations(
+        run.font.as_ref(),
+        run.font_size,
+        &run.variations,
+      ) {
         ascent = ascent.max(scaled.ascent);
         descent = descent.max(scaled.descent);
         line_gap = line_gap.max(scaled.line_gap);

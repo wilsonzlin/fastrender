@@ -235,6 +235,7 @@ fn test_all_fixture_files_exist() {
     "text_overflow_wrap_word_break_priority",
     "text_letter_spacing_vertical",
     "text_font_palette_overrides_display_list",
+    "text_variable_font_mvar_line_height",
     "text_vertical_orientation_mixed",
     "text_vertical_upright_bidi_preserve_order",
     "text_combine_upright_scale",
@@ -552,6 +553,12 @@ fn test_fixture_text_font_variant_emoji_webfont() {
 fn test_fixture_text_font_palette_overrides_display_list() {
   test_fixture("text_font_palette_overrides_display_list")
     .expect("text_font_palette_overrides_display_list fixture should render");
+}
+
+#[test]
+fn test_fixture_text_variable_font_mvar_line_height() {
+  test_fixture("text_variable_font_mvar_line_height")
+    .expect("text_variable_font_mvar_line_height fixture should render");
 }
 
 #[test]

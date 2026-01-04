@@ -53,17 +53,24 @@ use crate::text::font_db::LoadedFont;
 use crate::text::font_db::ScaledMetrics;
 use crate::text::font_fallback::FontId;
 use crate::text::pipeline::DEFAULT_OBLIQUE_ANGLE_DEG;
+use crate::text::variations::variation_hash;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine;
 use fontdb::Database as FontDbDatabase;
+use lru::LruCache;
+use parking_lot::Mutex as ParkingMutex;
 use percent_encoding::percent_decode_str;
 use rustybuzz::ttf_parser::{self, GlyphId, Tag};
 use rustybuzz::Direction;
 use rustybuzz::Face;
 use rustybuzz::Feature;
 use rustybuzz::UnicodeBuffer;
+use rustybuzz::Variation;
+use rustc_hash::FxHasher;
 use std::collections::HashSet;
+use std::hash::BuildHasherDefault;
 use std::fs;
+use std::num::NonZeroUsize;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::sync::mpsc;
@@ -90,6 +97,9 @@ const FALLBACK_SWAP_PERIOD: Duration = Duration::from_secs(3);
 const OPTIONAL_BLOCK_PERIOD: Duration = Duration::from_millis(100);
 /// Default render-time window for waiting on blocking web fonts.
 pub const DEFAULT_WEB_FONT_TIMEOUT: Duration = Duration::from_millis(500);
+
+const SCALED_METRICS_CACHE_SIZE: usize = 1024;
+type ScaledMetricsCacheHasher = BuildHasherDefault<FxHasher>;
 
 // Hard limit on font payload sizes to avoid allocator aborts on corrupt inputs.
 const MAX_FONT_BYTES: u64 = 32 * 1024 * 1024;
@@ -333,6 +343,7 @@ pub struct FontContext {
   web_fonts: Arc<RwLock<Vec<WebFontFace>>>,
   web_families: Arc<RwLock<std::collections::HashSet<String>>>,
   feature_support: Arc<RwLock<std::collections::HashMap<(usize, u32, u32), bool>>>,
+  scaled_metrics_cache: Arc<ParkingMutex<LruCache<ScaledMetricsCacheKey, ScaledMetrics, ScaledMetricsCacheHasher>>>,
   fetcher: Arc<dyn FontFetcher>,
   resource_context_shared: Option<Arc<RwLock<Option<ResourceContext>>>>,
   pending_async: Arc<(Mutex<usize>, Condvar)>,
@@ -347,6 +358,44 @@ pub struct FontContext {
 #[derive(Clone)]
 struct MathTableCacheEntry {
   table: ttf_parser::math::Table<'static>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct ScaledMetricsCacheKey {
+  font_ptr: usize,
+  font_index: u32,
+  effective_font_size_bits: u32,
+  ascent_override_bits: Option<u32>,
+  descent_override_bits: Option<u32>,
+  line_gap_override_bits: Option<u32>,
+  variation_hash: u64,
+}
+
+impl ScaledMetricsCacheKey {
+  fn new(font: &LoadedFont, effective_font_size: f32, overrides: FontFaceMetricsOverrides, variations: &[Variation]) -> Self {
+    let ascent_override_bits = overrides
+      .ascent_override
+      .filter(|v| v.is_finite() && *v >= 0.0)
+      .map(f32::to_bits);
+    let descent_override_bits = overrides
+      .descent_override
+      .filter(|v| v.is_finite() && *v >= 0.0)
+      .map(f32::to_bits);
+    let line_gap_override_bits = overrides
+      .line_gap_override
+      .filter(|v| v.is_finite() && *v >= 0.0)
+      .map(f32::to_bits);
+
+    Self {
+      font_ptr: Arc::as_ptr(&font.data) as usize,
+      font_index: font.index,
+      effective_font_size_bits: effective_font_size.to_bits(),
+      ascent_override_bits,
+      descent_override_bits,
+      line_gap_override_bits,
+      variation_hash: variation_hash(variations),
+    }
+  }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -549,6 +598,10 @@ impl FontContext {
       web_fonts: Arc::new(RwLock::new(Vec::new())),
       web_families: Arc::new(RwLock::new(std::collections::HashSet::new())),
       feature_support: Arc::new(RwLock::new(std::collections::HashMap::new())),
+      scaled_metrics_cache: Arc::new(ParkingMutex::new(LruCache::with_hasher(
+        NonZeroUsize::new(SCALED_METRICS_CACHE_SIZE).unwrap(),
+        ScaledMetricsCacheHasher::default(),
+      ))),
       fetcher,
       resource_context_shared: None,
       pending_async: Arc::new((Mutex::new(0), Condvar::new())),
@@ -2012,7 +2065,15 @@ impl FontContext {
   /// }
   /// ```
   pub fn get_scaled_metrics(&self, font: &LoadedFont, font_size: f32) -> Option<ScaledMetrics> {
-    let metrics = font.metrics().ok()?;
+    self.get_scaled_metrics_with_variations(font, font_size, &[])
+  }
+
+  pub fn get_scaled_metrics_with_variations(
+    &self,
+    font: &LoadedFont,
+    font_size: f32,
+    variations: &[Variation],
+  ) -> Option<ScaledMetrics> {
     let overrides = font.face_metrics_overrides;
     let size_adjust = if overrides.size_adjust.is_finite() && overrides.size_adjust > 0.0 {
       overrides.size_adjust
@@ -2020,27 +2081,49 @@ impl FontContext {
       1.0
     };
     let effective_font_size = font_size * size_adjust;
+    if !effective_font_size.is_finite() || effective_font_size <= 0.0 {
+      return None;
+    }
+
+    let key = ScaledMetricsCacheKey::new(font, effective_font_size, overrides, variations);
+    if let Some(found) = self.scaled_metrics_cache.lock().get(&key).cloned() {
+      return Some(found);
+    }
+
+    let metrics = if variations.is_empty() {
+      font.metrics().ok()?
+    } else {
+      let coords: Vec<_> = variations.iter().map(|v| (v.tag, v.value)).collect();
+      font
+        .metrics_with_variations(&coords)
+        .or_else(|_| font.metrics())
+        .ok()?
+    };
+
     let mut scaled = metrics.scale(effective_font_size);
 
-    if overrides.has_metric_overrides() {
+    let ascent_override = overrides
+      .ascent_override
+      .filter(|v| v.is_finite() && *v >= 0.0);
+    let descent_override = overrides
+      .descent_override
+      .filter(|v| v.is_finite() && *v >= 0.0);
+    let line_gap_override = overrides
+      .line_gap_override
+      .filter(|v| v.is_finite() && *v >= 0.0);
+    let has_metric_overrides =
+      ascent_override.is_some() || descent_override.is_some() || line_gap_override.is_some();
+
+    if has_metric_overrides {
       // Metric override descriptors are percentages of the face's used font size, which already
       // includes the `size-adjust` scaling factor when specified.
-      if let Some(multiplier) = overrides
-        .ascent_override
-        .filter(|v| v.is_finite() && *v >= 0.0)
-      {
+      if let Some(multiplier) = ascent_override {
         scaled.ascent = multiplier * effective_font_size;
       }
-      if let Some(multiplier) = overrides
-        .descent_override
-        .filter(|v| v.is_finite() && *v >= 0.0)
-      {
+      if let Some(multiplier) = descent_override {
         scaled.descent = multiplier * effective_font_size;
       }
-      if let Some(multiplier) = overrides
-        .line_gap_override
-        .filter(|v| v.is_finite() && *v >= 0.0)
-      {
+      if let Some(multiplier) = line_gap_override {
         scaled.line_gap = multiplier * effective_font_size;
       }
 
@@ -2048,6 +2131,7 @@ impl FontContext {
       scaled.line_height = scaled.ascent + scaled.descent + scaled.line_gap;
     }
 
+    self.scaled_metrics_cache.lock().put(key, scaled.clone());
     Some(scaled)
   }
 

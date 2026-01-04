@@ -1,0 +1,57 @@
+<!doctype html>
+<html>
+<meta charset="utf-8" />
+<style>
+  @font-face {
+    font-family: "VarMVAR";
+    src: url("tests/fixtures/fonts/mvar-metrics-test.ttf") format("truetype");
+  }
+
+  body {
+    margin: 0;
+    background: white;
+  }
+
+  .wrap {
+    display: flex;
+    gap: 40px;
+    padding: 40px;
+  }
+
+  .sample {
+    width: 240px;
+    padding: 16px;
+    border: 2px solid rgba(0, 0, 0, 0.25);
+    background: rgba(0, 0, 0, 0.03);
+
+    font-family: "VarMVAR";
+    font-size: 72px;
+    line-height: normal;
+
+    text-decoration-line: underline;
+    text-decoration-thickness: from-font;
+    text-underline-position: from-font;
+  }
+
+  .small {
+    font-weight: 100;
+  }
+
+  .large {
+    font-weight: 900;
+  }
+</style>
+
+<div class="wrap">
+  <div class="sample small">
+    HA<br />
+    HA<br />
+    HA
+  </div>
+  <div class="sample large">
+    HA<br />
+    HA<br />
+    HA
+  </div>
+</div>
+</html>

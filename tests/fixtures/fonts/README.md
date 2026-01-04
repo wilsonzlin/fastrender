@@ -448,6 +448,17 @@ pip install -r tests/fixtures/fonts/requirements.txt
   - Relevant axes (from `fvar`): `wght` 38–250 (default 88), `wdth` 60–402 (default 402), `opsz` 10–72 (default 14).
   - Tests exercise the extremes of the `wght` axis (40 vs 250) to ensure glyph outlines visibly change when variations are applied during rasterization.
 
+### `mvar-metrics-test.ttf`
+- **Source:** Generated in-repo with [FontTools](https://github.com/fonttools/fonttools) v4.61.1 via `generate_mvar_metrics_test_font.py`.
+- **License:** CC0 / Public Domain.
+- **Glyphs:** U+0041 (`A`), U+0048 (`H`), and U+0020 (space).
+- **Axes:** Single `wght` axis (100–900, default 400).
+- **Features exercised:** `MVAR` metric deltas tied to the `wght` axis for OS/2 typo line metrics (`sTypoAscender`, `sTypoDescender`, `sTypoLineGap`) plus underline/strike tables (`post` underline position/thickness and OS/2 strikeout position/size). Used to validate variation-aware line-height and text-decoration placement.
+- **Regeneration:** From the repository root:
+  ```bash
+  python tests/fixtures/fonts/generate_mvar_metrics_test_font.py
+  ```
+
 ### `TestVar.ttf`
 - **Source:** Generated in-repo with `fontTools.fontBuilder` for deterministic variable font testing.
 - **License:** Created specifically for FastRender tests; no third-party assets or licensing obligations.

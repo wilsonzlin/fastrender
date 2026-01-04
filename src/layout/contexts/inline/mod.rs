@@ -3895,7 +3895,14 @@ impl InlineFormattingContext {
       .or_else(|| self.font_context.get_sans_serif())
       .and_then(|font| {
         let used_font_size = compute_adjusted_font_size(style, &font, preferred_aspect);
-        self.font_context.get_scaled_metrics(&font, used_font_size)
+        let authored = crate::text::variations::authored_variations_from_style(style);
+        let variations = crate::text::face_cache::with_face(&font, |face| {
+          crate::text::variations::collect_variations_for_face(face, style, used_font_size, &authored)
+        })
+        .unwrap_or_else(|| authored.clone());
+        self
+          .font_context
+          .get_scaled_metrics_with_variations(&font, used_font_size, &variations)
       })
   }
 

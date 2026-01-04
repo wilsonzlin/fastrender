@@ -25,4 +25,5 @@ mod script_test;
 mod shaper_test;
 mod svg_color_font_test;
 mod svg_glyph_safety_test;
+mod variable_font_metrics_mvar;
 mod web_font_display;

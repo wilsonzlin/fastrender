@@ -866,6 +866,7 @@ impl Painter {
     let italic = matches!(style.font_style, crate::style::types::FontStyle::Italic);
     let oblique = matches!(style.font_style, crate::style::types::FontStyle::Oblique(_));
     let stretch = FontStretch::from_percentage(style.font_stretch.to_percentage());
+    let preferred_aspect = crate::text::pipeline::preferred_font_aspect(style, &self.font_ctx);
 
     self
       .font_ctx
@@ -882,7 +883,26 @@ impl Painter {
         stretch,
       )
       .or_else(|| self.font_ctx.get_sans_serif())
-      .and_then(|font| self.font_ctx.get_scaled_metrics(&font, style.font_size))
+      .and_then(|font| {
+        let used_font_size = crate::text::pipeline::compute_adjusted_font_size(
+          style,
+          &font,
+          preferred_aspect,
+        );
+        let authored = crate::text::variations::authored_variations_from_style(style);
+        let variations = crate::text::face_cache::with_face(&font, |face| {
+          crate::text::variations::collect_variations_for_face(
+            face,
+            style,
+            used_font_size,
+            &authored,
+          )
+        })
+        .unwrap_or_else(|| authored.clone());
+        self
+          .font_ctx
+          .get_scaled_metrics_with_variations(&font, used_font_size, &variations)
+      })
   }
 
   fn resolve_scaled_metrics_static(
@@ -892,6 +912,7 @@ impl Painter {
     let italic = matches!(style.font_style, crate::style::types::FontStyle::Italic);
     let oblique = matches!(style.font_style, crate::style::types::FontStyle::Oblique(_));
     let stretch = FontStretch::from_percentage(style.font_stretch.to_percentage());
+    let preferred_aspect = crate::text::pipeline::preferred_font_aspect(style, font_ctx);
 
     font_ctx
       .get_font_full(
@@ -907,7 +928,24 @@ impl Painter {
         stretch,
       )
       .or_else(|| font_ctx.get_sans_serif())
-      .and_then(|font| font_ctx.get_scaled_metrics(&font, style.font_size))
+      .and_then(|font| {
+        let used_font_size = crate::text::pipeline::compute_adjusted_font_size(
+          style,
+          &font,
+          preferred_aspect,
+        );
+        let authored = crate::text::variations::authored_variations_from_style(style);
+        let variations = crate::text::face_cache::with_face(&font, |face| {
+          crate::text::variations::collect_variations_for_face(
+            face,
+            style,
+            used_font_size,
+            &authored,
+          )
+        })
+        .unwrap_or_else(|| authored.clone());
+        font_ctx.get_scaled_metrics_with_variations(&font, used_font_size, &variations)
+      })
   }
 
   fn element_scroll_offset(&self, fragment: &FragmentNode) -> Point {
@@ -7412,7 +7450,7 @@ impl Painter {
             .or_else(|_| run.font.metrics())
         }
         .ok()?;
-        Some((metrics, run.font_size))
+        Some((metrics, run.font_size * run.scale))
       })
     });
 
@@ -7421,6 +7459,7 @@ impl Painter {
       let oblique = matches!(style.font_style, crate::style::types::FontStyle::Oblique(_));
       let stretch =
         crate::text::font_db::FontStretch::from_percentage(style.font_stretch.to_percentage());
+      let preferred_aspect = crate::text::pipeline::preferred_font_aspect(style, &self.font_ctx);
       metrics_source = self
         .font_ctx
         .get_font_full(
@@ -7437,34 +7476,38 @@ impl Painter {
         )
         .or_else(|| self.font_ctx.get_sans_serif())
         .and_then(|font| {
-          let coords = font
-            .as_cached_face()
-            .ok()
-            .and_then(|face| {
-              let authored = crate::text::pipeline::authored_variations_from_style(style);
-              let variations = crate::text::pipeline::collect_variations_for_face(
-                face.face(),
-                style,
-                style.font_size,
-                &authored,
-              );
-              Some(
-                variations
-                  .iter()
-                  .map(|v| (v.tag, v.value))
-                  .collect::<Vec<_>>(),
-              )
-            })
-            .unwrap_or_default();
-          if coords.is_empty() {
-            font.metrics().ok().map(|m| (m, style.font_size))
+          let used_font_size = crate::text::pipeline::compute_adjusted_font_size(
+            style,
+            &font,
+            preferred_aspect,
+          );
+          let authored = crate::text::variations::authored_variations_from_style(style);
+          let variations = crate::text::face_cache::with_face(&font, |face| {
+            crate::text::variations::collect_variations_for_face(
+              face,
+              style,
+              used_font_size,
+              &authored,
+            )
+          })
+          .unwrap_or_else(|| authored.clone());
+          let coords: Vec<_> = variations.iter().map(|v| (v.tag, v.value)).collect();
+          let metrics = if coords.is_empty() {
+            font.metrics().ok()?
           } else {
             font
               .metrics_with_variations(&coords)
               .or_else(|_| font.metrics())
-              .ok()
-              .map(|m| (m, style.font_size))
-          }
+              .ok()?
+          };
+          let size_adjust = if font.face_metrics_overrides.size_adjust.is_finite()
+            && font.face_metrics_overrides.size_adjust > 0.0
+          {
+            font.face_metrics_overrides.size_adjust
+          } else {
+            1.0
+          };
+          Some((metrics, used_font_size * size_adjust))
         });
     }
 
