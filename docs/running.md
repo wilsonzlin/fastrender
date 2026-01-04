@@ -11,8 +11,14 @@ Use the `xtask` wrapper for common local loops:
 - Update pageset scoreboard: `cargo xtask pageset`
 - Render a page: `cargo xtask render-page --url https://example.com --output out.png`
 - Diff renders: `cargo xtask diff-renders --before fetches/renders/baseline --after fetches/renders/new`
+- Deterministic fixture-vs-Chrome evidence report (offline): `cargo xtask fixture-chrome-diff`
 
-`cargo xtask --help` and per-subcommand help describe available flags and defaults. All commands run offline unless you explicitly pass a network URL to `render-page`.
+`cargo xtask --help` and per-subcommand help describe available flags and defaults.
+
+Note on offline vs network:
+- `pageset` / `fetch_pages` use the network by default (unless you pass `--no-fetch` / reuse cached HTML).
+- Offline fixture workflows (`fixture-chrome-diff`, `chrome-baseline-fixtures`, `render_fixtures`, `pages_regression`) do not hit the network.
+- `render-page` is offline with `--file` and uses the network with `--url`.
 
 ## Pageset scoreboard loop (recommended)
 
