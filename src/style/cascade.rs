@@ -16269,6 +16269,54 @@ slot[name=\"s\"]::slotted(.assigned) { color: rgb(4, 5, 6); }"
   }
 
   #[test]
+  fn registered_custom_property_revert_layer_via_var_uses_layer_base() {
+    let dom = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "div".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![
+          ("id".to_string(), "parent".to_string()),
+          ("style".to_string(), "--kw: revert-layer;".to_string()),
+        ],
+      },
+      children: vec![DomNode {
+        node_type: DomNodeType::Element {
+          tag_name: "div".to_string(),
+          namespace: HTML_NAMESPACE.to_string(),
+          attributes: vec![("id".to_string(), "target".to_string())],
+        },
+        children: vec![],
+      }],
+    };
+    let stylesheet = parse_stylesheet(
+      r#"
+        @property --len {
+          syntax: "<length>";
+          inherits: true;
+          initial-value: 5px;
+        }
+        @layer base { #target { --len: 10px; } }
+        @layer theme { #target { --len: var(--kw); } }
+        #target { width: var(--len); }
+      "#,
+    )
+    .unwrap();
+
+    let styled = apply_styles(&dom, &stylesheet);
+    let target = styled.children.first().expect("target");
+    assert_eq!(target.styles.width, Some(Length::px(10.0)));
+    let value = target
+      .styles
+      .custom_properties
+      .get("--len")
+      .expect("registered custom property");
+    assert!(matches!(
+      value.typed,
+      Some(CustomPropertyTypedValue::Length(len)) if len == Length::px(10.0)
+    ));
+  }
+
+  #[test]
   fn text_combine_upright_inherits() {
     let mut parent = ComputedStyle::default();
     parent.text_combine_upright = TextCombineUpright::Digits(3);
