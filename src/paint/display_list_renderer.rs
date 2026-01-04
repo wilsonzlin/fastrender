@@ -10,7 +10,9 @@ use crate::css::types::RadialGradientSize;
 use crate::error::{Error, RenderError, RenderStage, Result};
 use crate::geometry::Point;
 use crate::geometry::Rect;
-use crate::paint::blur::{alpha_bounds, apply_gaussian_blur_cached, BlurCache, BlurCacheOps, SharedBlurCache};
+use crate::paint::blur::{
+  alpha_bounds, apply_gaussian_blur_cached, BlurCache, BlurCacheOps, SharedBlurCache,
+};
 use crate::paint::canvas::Canvas;
 use crate::paint::canvas::{apply_mask_with_offset, crop_mask};
 use crate::paint::display_list::BlendMode;
@@ -754,15 +756,13 @@ fn apply_filters(
 ) -> RenderResult<()> {
   for filter in filters {
     match filter {
-      ResolvedFilter::Blur(radius) => {
-        apply_gaussian_blur_cached(
-          pixmap,
-          *radius * scale,
-          *radius * scale,
-          cache.as_deref_mut(),
-          scale,
-        )?
-      }
+      ResolvedFilter::Blur(radius) => apply_gaussian_blur_cached(
+        pixmap,
+        *radius * scale,
+        *radius * scale,
+        cache.as_deref_mut(),
+        scale,
+      )?,
       ResolvedFilter::Brightness(amount) => {
         crate::paint::css_filter::apply_color_filter(pixmap, |c, a| {
           (crate::paint::css_filter::scale_color(c, *amount), a)
@@ -2757,13 +2757,16 @@ impl DisplayListRenderer {
   fn stacking_layer_bounds(
     &self,
     bounds: Rect,
+    css_bounds: Rect,
     transform: Transform,
     filters: &[ResolvedFilter],
     backdrop_filters: &[ResolvedFilter],
   ) -> Option<Rect> {
     let mut layer_bounds = transform_rect(bounds, &transform);
-    let (f_l, f_t, f_r, f_b) = filter_outset(filters, self.scale).as_tuple();
-    let (b_l, b_t, b_r, b_b) = filter_outset(backdrop_filters, self.scale).as_tuple();
+    let (f_l, f_t, f_r, f_b) =
+      filter_outset_with_bounds(filters, self.scale, Some(css_bounds)).as_tuple();
+    let (b_l, b_t, b_r, b_b) =
+      filter_outset_with_bounds(backdrop_filters, self.scale, Some(css_bounds)).as_tuple();
     let expand_left = f_l.max(b_l);
     let expand_top = f_t.max(b_t);
     let expand_right = f_r.max(b_r);
@@ -6494,7 +6497,13 @@ impl DisplayListRenderer {
             } else {
               combined_transform
             };
-            self.stacking_layer_bounds(bounds, bounds_transform, &scaled_filters, &scaled_backdrop)
+            self.stacking_layer_bounds(
+              bounds,
+              css_bounds,
+              bounds_transform,
+              &scaled_filters,
+              &scaled_backdrop,
+            )
           })
           .flatten();
         let layer_origin = if needs_layer && !has_backdrop {
@@ -10653,7 +10662,8 @@ mod tests {
     }
 
     let cancel: Arc<CancelCallback> = Arc::new(|| {
-      rayon::current_thread_index().is_some() && crate::render_control::active_stage() != Some(RenderStage::Paint)
+      rayon::current_thread_index().is_some()
+        && crate::render_control::active_stage() != Some(RenderStage::Paint)
     });
     let deadline = RenderDeadline::new(None, Some(cancel));
 

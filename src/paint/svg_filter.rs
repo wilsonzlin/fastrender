@@ -2626,83 +2626,85 @@ pub(crate) fn apply_svg_filter_with_cache(
   };
 
   let Some((res_w, res_h)) = def.filter_res else {
-    apply_svg_filter_scaled(
-      def,
-      pixmap,
-      scale,
-      scale,
-      bbox,
-      blur_cache.as_deref_mut(),
-    )?;
+    apply_svg_filter_scaled(def, pixmap, scale, scale, bbox, blur_cache.as_deref_mut())?;
     return Ok(());
   };
 
   let target_w = pixmap.width();
   let target_h = pixmap.height();
-  let res_w = res_w.min(MAX_FILTER_RES);
-  let res_h = res_h.min(MAX_FILTER_RES);
   if target_w == 0 || target_h == 0 || res_w == 0 || res_h == 0 {
-    apply_svg_filter_scaled(
-      def,
-      pixmap,
-      scale,
-      scale,
-      bbox,
-      blur_cache.as_deref_mut(),
-    )?;
-    return Ok(());
-  }
-  if res_w == target_w && res_h == target_h {
-    apply_svg_filter_scaled(
-      def,
-      pixmap,
-      scale,
-      scale,
-      bbox,
-      blur_cache.as_deref_mut(),
-    )?;
+    apply_svg_filter_scaled(def, pixmap, scale, scale, bbox, blur_cache.as_deref_mut())?;
     return Ok(());
   }
 
-  let Some(mut working_pixmap) = resize_pixmap(pixmap, res_w, res_h) else {
+  let scale_res_x = res_w as f32 / filter_region.width();
+  let scale_res_y = res_h as f32 / filter_region.height();
+  let scale_valid =
+    scale_res_x.is_finite() && scale_res_x > 0.0 && scale_res_y.is_finite() && scale_res_y > 0.0;
+  if !scale_valid {
+    apply_svg_filter_scaled(def, pixmap, scale, scale, bbox, blur_cache.as_deref_mut())?;
+    return Ok(());
+  }
+
+  let mut working_w = (target_w as f32 * scale_res_x).round();
+  let mut working_h = (target_h as f32 * scale_res_y).round();
+  if !working_w.is_finite() || !working_h.is_finite() || working_w <= 0.0 || working_h <= 0.0 {
+    apply_svg_filter_scaled(def, pixmap, scale, scale, bbox, blur_cache.as_deref_mut())?;
+    return Ok(());
+  }
+
+  working_w = working_w.clamp(1.0, MAX_FILTER_RES as f32);
+  working_h = working_h.clamp(1.0, MAX_FILTER_RES as f32);
+  let working_w = working_w as u32;
+  let working_h = working_h as u32;
+
+  let eff_scale_res_x = working_w as f32 / target_w as f32;
+  let eff_scale_res_y = working_h as f32 / target_h as f32;
+  let eff_scale_valid = eff_scale_res_x.is_finite()
+    && eff_scale_res_x > 0.0
+    && eff_scale_res_y.is_finite()
+    && eff_scale_res_y > 0.0;
+  if !eff_scale_valid {
+    apply_svg_filter_scaled(def, pixmap, scale, scale, bbox, blur_cache.as_deref_mut())?;
+    return Ok(());
+  }
+
+  if working_w == target_w && working_h == target_h {
     apply_svg_filter_scaled(
       def,
       pixmap,
-      scale,
-      scale,
+      scale * eff_scale_res_x,
+      scale * eff_scale_res_y,
       bbox,
       blur_cache.as_deref_mut(),
     )?;
+    clip_to_region(pixmap, filter_region);
+    return Ok(());
+  }
+
+  let Some(mut working_pixmap) = resize_pixmap(pixmap, working_w, working_h) else {
+    apply_svg_filter_scaled(def, pixmap, scale, scale, bbox, blur_cache.as_deref_mut())?;
     return Ok(());
   };
 
-  let scale_res_x = res_w as f32 / target_w as f32;
-  let scale_res_y = res_h as f32 / target_h as f32;
   let bbox_working = Rect::from_xywh(
-    bbox.x() * scale_res_x,
-    bbox.y() * scale_res_y,
-    bbox.width() * scale_res_x,
-    bbox.height() * scale_res_y,
+    bbox.x() * eff_scale_res_x,
+    bbox.y() * eff_scale_res_y,
+    bbox.width() * eff_scale_res_x,
+    bbox.height() * eff_scale_res_y,
   );
 
   apply_svg_filter_scaled(
     def,
     &mut working_pixmap,
-    scale * scale_res_x,
-    scale * scale_res_y,
+    scale * eff_scale_res_x,
+    scale * eff_scale_res_y,
     bbox_working,
     blur_cache.as_deref_mut(),
   )?;
 
   let Some(resized_back) = resize_pixmap(&working_pixmap, target_w, target_h) else {
-    apply_svg_filter_scaled(
-      def,
-      pixmap,
-      scale,
-      scale,
-      bbox,
-      blur_cache.as_deref_mut(),
-    )?;
+    apply_svg_filter_scaled(def, pixmap, scale, scale, bbox, blur_cache.as_deref_mut())?;
     return Ok(());
   };
   *pixmap = resized_back;
@@ -5628,6 +5630,43 @@ mod filter_res_tests {
   }
 
   #[test]
+  fn filter_res_identity_does_not_resample_offset_region() {
+    let cache = ImageCache::new();
+    let svg = "<svg xmlns='http://www.w3.org/2000/svg'><filter id='f' filterUnits='userSpaceOnUse' x='2' y='2' width='4' height='4' filterRes='4 4'><feOffset dx='0' dy='0'/></filter></svg>";
+    let filter = load_svg_filter(&data_url(svg), &cache).expect("parsed filter");
+
+    let mut pixmap = new_pixmap(8, 8).unwrap();
+    for (idx, px) in pixmap.pixels_mut().iter_mut().enumerate() {
+      let v = idx as u8;
+      *px = PremultipliedColorU8::from_rgba(v, v.wrapping_mul(3), v.wrapping_mul(7), 255)
+        .unwrap_or(PremultipliedColorU8::TRANSPARENT);
+    }
+    let original = pixmap.clone();
+
+    let bbox = Rect::from_xywh(0.0, 0.0, 8.0, 8.0);
+    apply_svg_filter(filter.as_ref(), &mut pixmap, 1.0, bbox).unwrap();
+
+    for y in 0..pixmap.height() {
+      for x in 0..pixmap.width() {
+        let actual = pixmap.pixel(x, y).unwrap();
+        if (2..6).contains(&x) && (2..6).contains(&y) {
+          assert_eq!(
+            actual,
+            original.pixel(x, y).unwrap(),
+            "expected pixel at ({x},{y}) to remain unchanged"
+          );
+        } else {
+          assert_eq!(
+            actual,
+            PremultipliedColorU8::TRANSPARENT,
+            "expected pixel at ({x},{y}) to be clipped out"
+          );
+        }
+      }
+    }
+  }
+
+  #[test]
   fn filter_res_respects_filter_region_bounds() {
     let cache = ImageCache::new();
     let svg = "<svg xmlns='http://www.w3.org/2000/svg'><filter id='f' filterUnits='userSpaceOnUse' x='0' y='0' width='4' height='4' filterRes='2 2'><feOffset dx='0' dy='0'/></filter></svg>";
@@ -6407,6 +6446,21 @@ mod blend_pixmaps_tests {
       Some(backdrop),
       Some(solid_pixmap(SOURCE)),
       BlendMode::Difference,
+      filter_region,
+    )
+    .unwrap();
+    let pixel = blended.pixmap.pixel(0, 0).unwrap();
+    assert_pixel_close(pixel, (136, 80, 120, 255));
+  }
+
+  #[test]
+  fn blend_exclusion_matches_expected() {
+    let backdrop = solid_pixmap(BACKDROP);
+    let filter_region = backdrop.region;
+    let blended = blend_pixmaps(
+      Some(backdrop),
+      Some(solid_pixmap(SOURCE)),
+      BlendMode::Exclusion,
       filter_region,
     )
     .unwrap();
