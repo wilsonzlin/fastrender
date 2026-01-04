@@ -767,7 +767,7 @@ fn build_selector_bloom_store_impl<const WORDS: usize>(
   let root_id = summaries.len();
   summaries.push([0u64; WORDS]);
   let root_is_element = root.is_element();
-  let root_is_template = root.is_template_element();
+  let root_is_template = root.template_contents_are_inert();
   let mut root_summary = [0u64; WORDS];
   if root_is_element {
     add_selector_bloom_hashes_internal(root, quirks_mode, &mut |hash| {
@@ -785,7 +785,11 @@ fn build_selector_bloom_store_impl<const WORDS: usize>(
   });
 
   while let Some(mut frame) = stack.pop() {
-    let children = frame.node.traversal_children();
+    // `enumerate_dom_ids` includes template contents as DOM nodes even though they are inert for
+    // selector matching. Still traverse `children` here so the bloom store stays aligned with
+    // `node_id`, but block summary merging when the parent is a `<template>` so ancestors never see
+    // the inert template subtree.
+    let children = frame.node.children.as_slice();
     if frame.next_child < children.len() {
       let child = &children[frame.next_child];
       frame.next_child += 1;
@@ -795,7 +799,7 @@ fn build_selector_bloom_store_impl<const WORDS: usize>(
       summaries.push([0u64; WORDS]);
 
       let child_is_element = child.is_element();
-      let child_is_template = child.is_template_element();
+      let child_is_template = child.template_contents_are_inert();
       let mut child_summary = [0u64; WORDS];
       if child_is_element {
         add_selector_bloom_hashes_internal(child, quirks_mode, &mut |hash| {
@@ -853,7 +857,7 @@ fn build_selector_bloom_map_legacy<const WORDS: usize>(
       add_selector_bloom_hashes(node, &mut |hash| insert_summary_hash(&mut summary, hash));
     }
 
-    for child in node.traversal_children().iter() {
+    for child in node.children.iter() {
       let child_summary = if matches!(child.node_type, DomNodeType::ShadowRoot { .. }) {
         walk(child, map);
         None
@@ -7431,6 +7435,66 @@ mod tests {
     let counters = capture_has_counters();
     assert_eq!(counters.prunes, 0);
     assert_eq!(counters.evaluated, 1);
+  }
+
+  #[test]
+  fn bloom_pruning_ignores_inert_template_contents() {
+    reset_has_counters();
+    set_selector_bloom_enabled(true);
+    let dom = element("div", vec![element("template", vec![element_with_attrs(
+      "span",
+      vec![("class", "hit")],
+      vec![],
+    )])]);
+    let id_map = enumerate_dom_ids(&dom);
+    let bloom_store = build_selector_bloom_store(&dom, &id_map).expect("selector bloom store");
+
+    let host_summary = bloom_store.summary_for_id(1).expect("host summary");
+    let template_summary = bloom_store.summary_for_id(2).expect("template summary");
+    let hit_summary = bloom_store.summary_for_id(3).expect("hit summary");
+
+    let hit_hash = selector_bloom_hash("hit");
+    assert!(
+      hit_summary.contains_hash(hit_hash),
+      "template descendant should include its own selector bloom hashes"
+    );
+    assert!(
+      !template_summary.contains_hash(hit_hash),
+      "template summary should not merge template contents"
+    );
+    assert!(
+      !host_summary.contains_hash(hit_hash),
+      "ancestor summaries should not see inert template contents"
+    );
+
+    let mut caches = SelectorCaches::default();
+    caches.set_epoch(next_selector_cache_epoch());
+    let mut context = MatchingContext::new(
+      MatchingMode::Normal,
+      None,
+      &mut caches,
+      QuirksMode::NoQuirks,
+      NeedsSelectorFlags::No,
+      MatchingForInvalidation::No,
+    );
+    context.extra_data = ShadowMatchData::for_document().with_selector_blooms(Some(&bloom_store));
+
+    let mut input = ParserInput::new(".hit");
+    let mut parser = Parser::new(&mut input);
+    let list =
+      SelectorList::parse(&PseudoClassParser, &mut parser, ParseRelative::ForHas).expect("parse");
+    let selectors = build_relative_selectors(list);
+    let anchor = ElementRef::with_ancestors(&dom, &[]).with_node_id(1);
+
+    assert!(
+      !matches_has_relative(&anchor, &selectors, &mut context),
+      ":has should not match inert template contents"
+    );
+
+    let counters = capture_has_counters();
+    assert_eq!(counters.summary_prunes(), 1);
+    assert_eq!(counters.filter_prunes, 0);
+    assert_eq!(counters.evaluated, 0);
   }
 
   #[test]
