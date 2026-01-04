@@ -199,14 +199,16 @@ fn run() -> Result<i32, String> {
   let after_meta =
     fs::metadata(&args.after).map_err(|e| format!("{}: {e}", args.after.display()))?;
 
-  let html_dir = args
+  let html_dir_raw = args
     .html
     .parent()
     .filter(|p| !p.as_os_str().is_empty())
     .map(PathBuf::from)
     .unwrap_or_else(|| PathBuf::from("."));
-  fs::create_dir_all(&html_dir)
-    .map_err(|e| format!("failed to create report directory {html_dir:?}: {e}"))?;
+  fs::create_dir_all(&html_dir_raw)
+    .map_err(|e| format!("failed to create report directory {html_dir_raw:?}: {e}"))?;
+  let html_dir = fs::canonicalize(&html_dir_raw)
+    .map_err(|e| format!("failed to canonicalize report directory {html_dir_raw:?}: {e}"))?;
 
   let html_stem = args
     .html

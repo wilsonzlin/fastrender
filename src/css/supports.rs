@@ -1,7 +1,6 @@
 use super::properties::{
   is_global_keyword_str, is_known_style_property, parse_property_value,
-  supports_parsed_declaration_is_valid,
-  vendor_prefixed_property_alias,
+  supports_parsed_declaration_is_valid, vendor_prefixed_property_alias,
 };
 use crate::style::var_resolution::contains_var;
 use std::borrow::Cow;
@@ -59,7 +58,7 @@ pub fn supports_declaration(property: &str, value: &str) -> bool {
     alias
   } else {
     return false;
-  }
+  };
 
   if is_global_keyword_str(value_without_important) {
     return true;
