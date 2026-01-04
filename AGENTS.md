@@ -71,7 +71,7 @@ cargo run --release --bin pageset_progress -- report --pages example.com
 # - Renders are offline/repeatable (no network).
 # - Uses bundled fonts so output is stable across machines.
 # - Chrome baselines are local-only artifacts (not committed).
-# - Defaults match the pages_regression viewport/DPR (1040x1240 @ 1.0) unless you override them.
+# - Defaults match the `pages_regression` viewport/DPR (1040x1240 @ 1.0) unless you override them.
 #
 # 1) Render the fixture(s) with FastRender:
 cargo run --release --bin render_fixtures
@@ -80,7 +80,7 @@ cargo run --release --bin render_fixtures
 cargo xtask chrome-baseline-fixtures
 #
 # 3) Generate a combined Chrome-vs-FastRender diff report:
-# (This re-runs steps 1-2 by default; pass `--chrome-dir <dir>` to reuse an existing Chrome baseline.)
+# (This re-runs steps 1-2 by default; pass `--no-chrome` to reuse an existing baseline under `<out-dir>/chrome`.)
 cargo xtask fixture-chrome-diff
 # Report: target/fixture_chrome_diff/report.html
 #
