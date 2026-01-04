@@ -2154,6 +2154,14 @@ impl DisplayListBuilder {
     {
       child_visibility = child_visibility.intersect(Some(bounds), true);
     }
+    // `build_fragment_internal` and the stacking tree are expressed in the pre-transform coordinate
+    // space of the stacking context. Visibility culling needs to operate in that same space, so
+    // map the visible rect back through the stacking context transform before using it to decide
+    // which fragments to emit.
+    child_visibility = Visibility {
+      rect: Self::visible_in_local_space(child_visibility.rect, transform.as_ref()),
+      hard_clip: child_visibility.hard_clip,
+    };
     if child_visibility.rect.is_none() && visibility.rect.is_some() {
       if pushed_opacity {
         self.pop_opacity();

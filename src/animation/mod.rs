@@ -2068,6 +2068,80 @@ fn animation_end_progress(direction: AnimationDirection, iterations: f32) -> f32
   }
 }
 
+fn scroll_driven_animation_progress(style: &ComputedStyle, idx: usize, raw: f32) -> Option<f32> {
+  if !raw.is_finite() {
+    return None;
+  }
+
+  let timing = pick(
+    &style.animation_timing_functions,
+    idx,
+    TransitionTimingFunction::Ease,
+  );
+  let iteration_count = pick(
+    &style.animation_iteration_counts,
+    idx,
+    AnimationIterationCount::default(),
+  );
+  let direction = pick(
+    &style.animation_directions,
+    idx,
+    AnimationDirection::default(),
+  );
+  let play_state = pick(
+    &style.animation_play_states,
+    idx,
+    AnimationPlayState::default(),
+  );
+
+  let raw = match play_state {
+    AnimationPlayState::Running => raw,
+    // Match `time_based_animation_progress` semantics by forcing the timeline progress to 0.
+    AnimationPlayState::Paused => 0.0,
+  };
+  let raw = raw.clamp(0.0, 1.0);
+
+  // Scroll/view timelines produce a finite 0..1 progress. For infinite iteration counts there is
+  // no stable mapping from finite timeline progress to the animation's active duration, so we
+  // choose a deterministic behavior for static rendering: treat infinite as a single iteration.
+  let mut iterations = iteration_count.as_f32();
+  if iterations.is_infinite() {
+    iterations = 1.0;
+  }
+
+  let start_progress = if iteration_reverses(direction, 0) {
+    1.0
+  } else {
+    0.0
+  };
+
+  if iterations <= 0.0 || raw <= 0.0 {
+    return Some(timing.value_at(start_progress));
+  }
+
+  if raw >= 1.0 {
+    let end_progress = animation_end_progress(direction, iterations);
+    return Some(timing.value_at(end_progress));
+  }
+
+  let total = (raw * iterations).max(0.0);
+  if total >= iterations {
+    // Handle rounding in `raw * iterations` when `raw` is very close to 1.0.
+    let end_progress = animation_end_progress(direction, iterations);
+    return Some(timing.value_at(end_progress));
+  }
+
+  let iteration = total.floor() as u64;
+  let iteration_progress = (total - iteration as f32).clamp(0.0, 1.0);
+  let reversed = iteration_reverses(direction, iteration);
+  let directed = if reversed {
+    1.0 - iteration_progress
+  } else {
+    iteration_progress
+  };
+  Some(timing.value_at(directed))
+}
+
 fn time_based_animation_progress_impl(
   style: &ComputedStyle,
   idx: usize,
@@ -2439,8 +2513,8 @@ fn apply_animations_to_node(
             None => settled_time_based_animation_progress(&*style_arc, idx),
           },
           AnimationTimeline::None => None,
-          AnimationTimeline::Named(ref timeline_name) => timelines.get(timeline_name).map(|state| {
-            match state {
+          AnimationTimeline::Named(ref timeline_name) => {
+            let raw = timelines.get(timeline_name).map(|state| match state {
               TimelineState::Scroll {
                 timeline,
                 scroll_pos,
@@ -2467,8 +2541,9 @@ fn apply_animations_to_node(
                 *scroll_offset,
                 &range,
               ),
-            }
-          }),
+            });
+            raw.and_then(|raw| scroll_driven_animation_progress(&*style_arc, idx, raw))
+          }
           AnimationTimeline::Scroll(timeline) => match timeline.scroller {
             ScrollTimelineScroller::SelfElement => scroll_self_timeline_progress(
               node,
@@ -2476,7 +2551,8 @@ fn apply_animations_to_node(
               scroll_state,
               timeline.axis,
               &range,
-            ),
+            )
+            .and_then(|raw| scroll_driven_animation_progress(&*style_arc, idx, raw)),
             ScrollTimelineScroller::Root | ScrollTimelineScroller::Nearest => None,
           },
           AnimationTimeline::View(_) => None,
