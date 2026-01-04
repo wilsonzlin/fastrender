@@ -2491,6 +2491,9 @@ fn attach_shadow_roots(node: &mut DomNode, deadline_counter: &mut usize) -> Resu
 
       stack.push((ptr, true));
 
+      // Declarative shadow DOM only promotes the first shadow root template child of a shadow host
+      // element. Additional `<template shadowroot=...>` siblings must remain inert, so we skip
+      // traversing into them here.
       let first_declarative_shadow_template = if node.is_element() {
         node
           .children

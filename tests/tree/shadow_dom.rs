@@ -33,6 +33,14 @@ fn find_shadow_root<'a>(node: &'a DomNode) -> Option<&'a DomNode> {
   }
 }
 
+fn count_shadow_roots(node: &DomNode) -> usize {
+  let mut count = matches!(node.node_type, DomNodeType::ShadowRoot { .. }) as usize;
+  for child in node.children.iter() {
+    count += count_shadow_roots(child);
+  }
+  count
+}
+
 fn build_id_lookup<'a>(
   node: &'a DomNode,
   ids: &HashMap<*const DomNode, usize>,
@@ -219,6 +227,12 @@ fn first_template_wins_for_multiple_declarative_shadow_roots() {
 fn nested_shadow_root_inside_unused_declarative_template_is_not_attached() {
   let html = "<div id='host'>\n  <template shadowroot='open'>\n    <div id='shadow-ok'></div>\n  </template>\n  <template shadowroot='closed'>\n    <div id='inner-host'>\n      <template shadowroot='open'>\n        <div id='should-not-attach'></div>\n      </template>\n    </div>\n  </template>\n</div>";
   let dom = parse_html(html).expect("parse html");
+
+  assert_eq!(
+    count_shadow_roots(&dom),
+    1,
+    "nested shadow roots should not attach inside inert declarative template contents"
+  );
 
   let host = find_by_id(&dom, "host").expect("host element");
   let shadow_roots: Vec<&DomNode> = host
