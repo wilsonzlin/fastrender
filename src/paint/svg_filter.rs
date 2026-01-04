@@ -922,13 +922,11 @@ fn filter_region_for_pixmap(pixmap: &Pixmap) -> Rect {
   Rect::from_xywh(0.0, 0.0, pixmap.width() as f32, pixmap.height() as f32)
 }
 
-fn transparent_result(filter_region: Rect) -> Option<FilterResult> {
-  let width = filter_region.width().max(0.0).round() as u32;
-  let height = filter_region.height().max(0.0).round() as u32;
-  Some(FilterResult::full_region(
-    new_pixmap(width, height)?,
-    filter_region,
-  ))
+fn transparent_result(source: &FilterResult) -> Option<FilterResult> {
+  Some(FilterResult {
+    pixmap: new_pixmap(source.pixmap.width(), source.pixmap.height())?,
+    region: Rect::ZERO,
+  })
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -2255,7 +2253,17 @@ fn parse_fe_color_matrix(node: &roxmltree::Node) -> Option<FilterPrimitive> {
   let kind_attr = node.attribute("type").unwrap_or("matrix");
   let kind = match kind_attr.to_ascii_lowercase().as_str() {
     "saturate" => {
-      let amount = parse_number(node.attribute("values")).clamp(0.0, 1.0);
+      // The `values` attribute defaults to 1 (identity). Clamp negative values to 0 while allowing
+      // oversaturation (> 1). Non-finite values are treated as missing so we don't poison the
+      // filter graph with NaNs.
+      let mut amount = parse_number_list(node.attribute("values"))
+        .get(0)
+        .copied()
+        .unwrap_or(1.0);
+      if !amount.is_finite() {
+        amount = 1.0;
+      }
+      let amount = amount.max(0.0);
       ColorMatrixKind::Saturate(amount)
     }
     "huerotate" => {
@@ -2356,7 +2364,7 @@ fn parse_fe_morphology(node: &roxmltree::Node) -> Option<FilterPrimitive> {
     false => MorphologyOp::Erode,
   };
   let (rx, ry) = parse_number_pair(node.attribute("radius"));
-  let radius = (rx.abs(), ry.abs());
+  let radius = (rx.max(0.0), ry.max(0.0));
   Some(FilterPrimitive::Morphology { input, radius, op })
 }
 
@@ -2409,9 +2417,7 @@ fn parse_transfer_fn(node: &roxmltree::Node) -> Option<TransferFn> {
       Some(TransferFn::Linear { slope, intercept })
     }
     "gamma" => {
-      let exponent = node
-        .attribute("exponent")
-        .and_then(|v| v.parse::<f32>().ok())?;
+      let exponent = parse_or_default("exponent", 1.0)?;
       let amplitude = parse_or_default("amplitude", 1.0)?;
       let offset = parse_or_default("offset", 0.0)?;
       Some(TransferFn::Gamma {
@@ -2485,7 +2491,7 @@ fn parse_fe_drop_shadow(node: &roxmltree::Node) -> Option<FilterPrimitive> {
   let dx = parse_number(node.attribute("dx"));
   let dy = parse_number(node.attribute("dy"));
   let (sx, sy) = parse_number_pair(node.attribute("stdDeviation"));
-  let std_dev = (sx.abs(), sy.abs());
+  let std_dev = (sx.max(0.0), sy.max(0.0));
   let color = parse_color(node.attribute("flood-color")).unwrap_or(Rgba::BLACK);
   let opacity = node
     .attribute("flood-opacity")
@@ -2539,8 +2545,8 @@ fn parse_fe_tile(node: &roxmltree::Node) -> Option<FilterPrimitive> {
 
 fn parse_fe_turbulence(node: &roxmltree::Node) -> Option<FilterPrimitive> {
   let base_freq_values = parse_number_list(node.attribute("baseFrequency"));
-  let fx = base_freq_values.get(0).copied().unwrap_or(0.05).abs();
-  let fy = base_freq_values.get(1).copied().unwrap_or(fx).abs();
+  let fx = base_freq_values.get(0).copied().unwrap_or(0.05).max(0.0);
+  let fy = base_freq_values.get(1).copied().unwrap_or(fx).max(0.0);
   let seed_raw = node
     .attribute("seed")
     .and_then(|v| v.parse::<f32>().ok())
@@ -3327,7 +3333,7 @@ fn resolve_input(
   source: &FilterResult,
   results: &HashMap<String, FilterResult>,
   current: &FilterResult,
-  filter_region: Rect,
+  _filter_region: Rect,
 ) -> Option<FilterResult> {
   match input {
     FilterInput::SourceGraphic => Some(source.clone()),
@@ -3339,19 +3345,20 @@ fn resolve_input(
         .zip(source.pixmap.pixels().iter())
       {
         let alpha = src.alpha();
-        *dst = PremultipliedColorU8::from_rgba(alpha, alpha, alpha, alpha)
+        *dst = PremultipliedColorU8::from_rgba(0, 0, 0, alpha)
           .unwrap_or(PremultipliedColorU8::TRANSPARENT);
       }
-      Some(FilterResult::new(mask, source.region, filter_region))
+      Some(FilterResult {
+        pixmap: mask,
+        region: source.region,
+      })
     }
-    FilterInput::BackgroundImage | FilterInput::BackgroundAlpha => {
-      transparent_result(filter_region)
-    }
-    FilterInput::FillPaint | FilterInput::StrokePaint => transparent_result(filter_region),
+    FilterInput::BackgroundImage | FilterInput::BackgroundAlpha => transparent_result(source),
+    FilterInput::FillPaint | FilterInput::StrokePaint => transparent_result(source),
     FilterInput::Reference(name) => results
       .get(name)
       .cloned()
-      .or_else(|| transparent_result(filter_region)),
+      .or_else(|| transparent_result(source)),
     FilterInput::Previous => Some(current.clone()),
   }
 }
@@ -5254,6 +5261,99 @@ mod tests {
       .expect("primitive output")
   }
 
+  #[test]
+  fn source_alpha_input_has_zero_rgb() {
+    let mut pixmap = new_pixmap(1, 1).unwrap();
+    pixmap.pixels_mut()[0] = ColorU8::from_rgba(200, 100, 50, 128).premultiply();
+
+    let region = filter_region_for_pixmap(&pixmap);
+    let src = FilterResult::full_region(pixmap, region);
+    let resolved = resolve_input(
+      &FilterInput::SourceAlpha,
+      &src,
+      &HashMap::new(),
+      &src,
+      region,
+    )
+    .expect("resolved SourceAlpha");
+
+    let px = resolved.pixmap.pixels()[0];
+    assert_eq!(
+      (px.red(), px.green(), px.blue(), px.alpha()),
+      (0, 0, 0, 128)
+    );
+    assert_eq!(resolved.region, src.region);
+  }
+
+  #[test]
+  fn missing_input_does_not_skip_composite_and_clips_to_primitive_region() {
+    let cache = ImageCache::new();
+    let svg = "<svg xmlns='http://www.w3.org/2000/svg'><filter id='f' filterUnits='userSpaceOnUse' primitiveUnits='userSpaceOnUse' x='0' y='0' width='4' height='4'><feComposite in='missing' in2='SourceGraphic' operator='over' x='0' y='0' width='2' height='2'/></filter></svg>";
+    let filter = parse_filter_definition(svg, Some("f"), &cache).expect("parsed filter");
+
+    let mut pixmap = new_pixmap(4, 4).unwrap();
+    for px in pixmap.pixels_mut() {
+      *px = PremultipliedColorU8::from_rgba(255, 0, 0, 255)
+        .unwrap_or(PremultipliedColorU8::TRANSPARENT);
+    }
+
+    let bbox = Rect::from_xywh(0.0, 0.0, 4.0, 4.0);
+    apply_svg_filter(filter.as_ref(), &mut pixmap, 1.0, bbox).unwrap();
+
+    for y in 0..4 {
+      for x in 0..4 {
+        let px = pixmap.pixel(x, y).unwrap();
+        if x < 2 && y < 2 {
+          assert_eq!(
+            (px.red(), px.green(), px.blue(), px.alpha()),
+            (255, 0, 0, 255),
+            "expected primitive output preserved at ({x},{y})"
+          );
+        } else {
+          assert_eq!(px.alpha(), 0, "expected output clipped at ({x},{y})");
+        }
+      }
+    }
+  }
+
+  #[test]
+  fn component_transfer_gamma_defaults_exponent_to_one() {
+    let cache = ImageCache::new();
+    let svg = "<svg xmlns='http://www.w3.org/2000/svg'><filter id='f' filterUnits='userSpaceOnUse' primitiveUnits='userSpaceOnUse' x='0' y='0' width='1' height='1'><feComponentTransfer><feFuncR type='gamma' amplitude='2' offset='0'/></feComponentTransfer></filter></svg>";
+    let filter = parse_filter_definition(svg, Some("f"), &cache).expect("parsed filter");
+
+    let mut pixmap = new_pixmap(1, 1).unwrap();
+    pixmap.pixels_mut()[0] =
+      PremultipliedColorU8::from_rgba(128, 0, 0, 255).unwrap_or(PremultipliedColorU8::TRANSPARENT);
+    let before = pixmap.pixels()[0].red();
+
+    let bbox = Rect::from_xywh(0.0, 0.0, 1.0, 1.0);
+    apply_svg_filter(filter.as_ref(), &mut pixmap, 1.0, bbox).unwrap();
+
+    let after = pixmap.pixels()[0].red();
+    assert_ne!(
+      after, before,
+      "expected feFuncR gamma to affect red channel"
+    );
+  }
+
+  #[test]
+  fn color_matrix_saturate_allows_values_over_one() {
+    let cache = ImageCache::new();
+    let svg = "<svg xmlns='http://www.w3.org/2000/svg'><filter id='f' filterUnits='userSpaceOnUse' primitiveUnits='userSpaceOnUse' x='0' y='0' width='1' height='1'><feColorMatrix type='saturate' values='2'/></filter></svg>";
+    let filter = parse_filter_definition(svg, Some("f"), &cache).expect("parsed filter");
+
+    let mut pixmap = new_pixmap(1, 1).unwrap();
+    pixmap.pixels_mut()[0] = PremultipliedColorU8::from_rgba(80, 120, 200, 255)
+      .unwrap_or(PremultipliedColorU8::TRANSPARENT);
+    let before = pixels_to_vec(&pixmap);
+
+    let bbox = Rect::from_xywh(0.0, 0.0, 1.0, 1.0);
+    apply_svg_filter(filter.as_ref(), &mut pixmap, 1.0, bbox).unwrap();
+
+    assert_ne!(pixels_to_vec(&pixmap), before);
+  }
+
   fn deadline_after_first_check() -> (RenderDeadline, Arc<AtomicUsize>) {
     let calls = Arc::new(AtomicUsize::new(0));
     let calls_cb = Arc::clone(&calls);
@@ -6054,6 +6154,24 @@ mod tests {
       FilterPrimitive::Turbulence { base_frequency, .. } => {
         assert!((base_frequency.0 - 0.1).abs() < 1e-6);
         assert!((base_frequency.1 - 0.2).abs() < 1e-6);
+      }
+      _ => panic!("expected turbulence primitive"),
+    }
+  }
+
+  #[test]
+  fn turbulence_base_frequency_clamps_negative_to_zero() {
+    let doc = roxmltree::Document::parse("<filter><feTurbulence baseFrequency=\"-0.1\"/></filter>")
+      .unwrap();
+    let node = doc
+      .descendants()
+      .find(|n| n.has_tag_name("feTurbulence"))
+      .unwrap();
+    let primitive = parse_fe_turbulence(&node).expect("should parse turbulence");
+    match primitive {
+      FilterPrimitive::Turbulence { base_frequency, .. } => {
+        assert_eq!(base_frequency.0, 0.0);
+        assert_eq!(base_frequency.1, 0.0);
       }
       _ => panic!("expected turbulence primitive"),
     }
