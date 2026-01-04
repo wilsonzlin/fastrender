@@ -1932,7 +1932,7 @@ mod tests {
   };
   use crate::style::color::Rgba;
   use crate::text::color_fonts::{ColorFontCaches, ColorFontRenderer};
-  use crate::text::font_db::{FontStretch, FontStyle, FontWeight, LoadedFont};
+  use crate::text::font_db::{FontFaceMetricsOverrides, FontStretch, FontStyle, FontWeight, LoadedFont};
   use crate::text::font_instance::FontInstance;
   use std::path::PathBuf;
   use std::sync::{Arc, Mutex};
@@ -1996,6 +1996,7 @@ mod tests {
       id: None,
       data: Arc::new(data),
       index: 0,
+      face_metrics_overrides: FontFaceMetricsOverrides::default(),
       family: "ColrV1Test".into(),
       weight: FontWeight::NORMAL,
       style: FontStyle::Normal,

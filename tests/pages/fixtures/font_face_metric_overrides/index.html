@@ -1,0 +1,113 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>@font-face metric overrides</title>
+    <style>
+      @font-face {
+        font-family: PlainUrl;
+        src: url("assets/DejaVuSans-subset.ttf") format("truetype");
+      }
+
+      @font-face {
+        font-family: AdjustedUrl;
+        src: url("assets/DejaVuSans-subset.ttf") format("truetype");
+        /* Values copied from a common real-world fallback override block (forbes.com). */
+        size-adjust: 106.34%;
+        ascent-override: 93.09%;
+        descent-override: 25.39%;
+        line-gap-override: 0%;
+      }
+
+      @font-face {
+        font-family: AdjustedLocal;
+        src: local("DejaVu Sans"), url("assets/DejaVuSans-subset.ttf") format("truetype");
+        size-adjust: 106.34%;
+        ascent-override: 93.09%;
+        descent-override: 25.39%;
+        line-gap-override: 0%;
+      }
+
+      body {
+        margin: 0;
+        padding: 24px;
+        background: #fff;
+        color: #111;
+      }
+
+      .grid {
+        display: flex;
+        gap: 20px;
+      }
+
+      .card {
+        width: 320px;
+        border: 2px solid #222;
+        padding: 12px;
+        box-sizing: border-box;
+      }
+
+      .label {
+        font: 18px/1.2 sans-serif;
+        margin-bottom: 8px;
+      }
+
+      .sample-fixed {
+        font-size: 64px;
+        line-height: normal;
+        height: 230px;
+        overflow: hidden;
+        background: #f6f6f6;
+        padding: 6px 10px;
+        box-sizing: border-box;
+      }
+
+      .sample-wrap {
+        margin-top: 12px;
+        font-size: 32px;
+        line-height: normal;
+        width: 100%;
+        background: #eef5ff;
+        padding: 8px 10px;
+        box-sizing: border-box;
+      }
+
+      .plain .sample-fixed,
+      .plain .sample-wrap {
+        font-family: PlainUrl, sans-serif;
+      }
+
+      .adjusted-url .sample-fixed,
+      .adjusted-url .sample-wrap {
+        font-family: AdjustedUrl, sans-serif;
+      }
+
+      .adjusted-local .sample-fixed,
+      .adjusted-local .sample-wrap {
+        font-family: AdjustedLocal, sans-serif;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="grid">
+      <div class="card plain">
+        <div class="label">Plain URL (no overrides)</div>
+        <div class="sample-fixed">One<br />Two<br />Three<br />Four</div>
+        <div class="sample-wrap">The quick brown fox jumps over the lazy dog.</div>
+      </div>
+
+      <div class="card adjusted-url">
+        <div class="label">URL + overrides</div>
+        <div class="sample-fixed">One<br />Two<br />Three<br />Four</div>
+        <div class="sample-wrap">The quick brown fox jumps over the lazy dog.</div>
+      </div>
+
+      <div class="card adjusted-local">
+        <div class="label">local() + overrides</div>
+        <div class="sample-fixed">One<br />Two<br />Three<br />Four</div>
+        <div class="sample-wrap">The quick brown fox jumps over the lazy dog.</div>
+      </div>
+    </div>
+  </body>
+</html>
+

@@ -1446,8 +1446,7 @@ impl MathLayoutContext {
         },
         stretch,
       )
-      .and_then(|font| font.metrics().ok())
-      .map(|m| m.scale(size))
+      .and_then(|font| self.font_ctx.get_scaled_metrics(&font, size))
       .unwrap_or_else(|| ScaledMetrics {
         font_size: size,
         scale: 1.0,

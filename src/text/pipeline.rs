@@ -162,6 +162,11 @@ pub struct TextDiagnostics {
   pub coverage_ms: f64,
   pub rasterize_ms: f64,
   pub shaped_runs: usize,
+  /// Count of shaped runs that used an `@font-face` `size-adjust` descriptor.
+  pub font_face_size_adjust_runs: usize,
+  /// Count of shaped runs that used `@font-face` metric overrides (`ascent-override`,
+  /// `descent-override`, or `line-gap-override`).
+  pub font_face_metric_override_runs: usize,
   pub glyphs: usize,
   pub color_glyph_rasters: usize,
   pub fallback_cache_hits: usize,
@@ -703,6 +708,34 @@ pub(crate) fn record_text_shape(
     diag.glyphs = diag.glyphs.saturating_add(glyphs);
   });
   drop(timer);
+}
+
+fn record_font_face_override_usage(runs: &[ShapedRun]) {
+  let mut size_adjust_runs = 0usize;
+  let mut metric_override_runs = 0usize;
+
+  for run in runs {
+    let overrides = run.font.face_metrics_overrides;
+    if overrides.size_adjust.is_finite() && (overrides.size_adjust - 1.0).abs() > f32::EPSILON {
+      size_adjust_runs += 1;
+    }
+    if overrides.has_metric_overrides() {
+      metric_override_runs += 1;
+    }
+  }
+
+  if size_adjust_runs == 0 && metric_override_runs == 0 {
+    return;
+  }
+
+  with_text_diagnostics(|diag| {
+    diag.font_face_size_adjust_runs = diag
+      .font_face_size_adjust_runs
+      .saturating_add(size_adjust_runs);
+    diag.font_face_metric_override_runs = diag
+      .font_face_metric_override_runs
+      .saturating_add(metric_override_runs);
+  });
 }
 
 pub(crate) fn record_text_coverage(timer: Option<TextDiagnosticsTimer>) {
@@ -2381,6 +2414,7 @@ fn font_supports_all_chars(font: &LoadedFont, chars: &[char]) -> bool {
 fn same_font_face(a: &LoadedFont, b: &LoadedFont) -> bool {
   Arc::ptr_eq(&a.data, &b.data)
     && a.index == b.index
+    && a.face_metrics_overrides == b.face_metrics_overrides
     && a.weight == b.weight
     && a.style == b.style
     && a.stretch == b.stretch
@@ -4808,10 +4842,12 @@ pub(crate) fn notdef_advance_for_font(font: &LoadedFont, font_size: f32) -> f32 
 }
 
 fn fallback_notdef_advance(run: &FontRun) -> f32 {
-  notdef_advance_for_font(&run.font, run.font_size)
+  notdef_advance_for_font(&run.font, run.font_size * run.font.face_metrics_overrides.size_adjust)
 }
 
 fn synthesize_notdef_run(run: &FontRun) -> ShapedRun {
+  let run_scale = run.font.face_metrics_overrides.size_adjust;
+  let baseline_shift = run.baseline_shift * run_scale;
   let inline_advance = fallback_notdef_advance(run);
 
   let mut glyphs = Vec::new();
@@ -4821,9 +4857,9 @@ fn synthesize_notdef_run(run: &FontRun) -> ShapedRun {
       continue;
     }
     let (x_offset, y_offset, x_advance, y_advance) = if run.vertical {
-      (run.baseline_shift, 0.0, 0.0, inline_advance)
+      (baseline_shift, 0.0, 0.0, inline_advance)
     } else {
-      (0.0, run.baseline_shift, inline_advance, 0.0)
+      (0.0, baseline_shift, inline_advance, 0.0)
     };
     glyphs.push(GlyphPosition {
       glyph_id: 0,
@@ -4846,7 +4882,7 @@ fn synthesize_notdef_run(run: &FontRun) -> ShapedRun {
     advance,
     font: Arc::clone(&run.font),
     font_size: run.font_size,
-    baseline_shift: run.baseline_shift,
+    baseline_shift,
     language: run.language.clone(),
     synthetic_bold: run.synthetic_bold,
     synthetic_oblique: run.synthetic_oblique,
@@ -4855,7 +4891,7 @@ fn synthesize_notdef_run(run: &FontRun) -> ShapedRun {
     palette_overrides: Arc::clone(&run.palette_overrides),
     palette_override_hash: run.palette_override_hash,
     variations: run.variations.clone(),
-    scale: 1.0,
+    scale: run_scale,
   }
 }
 
@@ -4969,7 +5005,10 @@ fn shape_font_run(run: &FontRun) -> Result<ShapedRun> {
 
   // Calculate scale factor
   let units_per_em = rb_face.as_face().units_per_em() as f32;
-  let scale = run.font_size / units_per_em;
+  let run_scale = run.font.face_metrics_overrides.size_adjust;
+  let effective_font_size = run.font_size * run_scale;
+  let scale = effective_font_size / units_per_em;
+  let baseline_shift = run.baseline_shift * run_scale;
 
   // Extract glyph information
   let glyph_infos = output.glyph_infos();
@@ -5058,7 +5097,7 @@ fn shape_font_run(run: &FontRun) -> Result<ShapedRun> {
       }
 
       let (x_offset, y_offset, x_advance, y_advance) =
-        map_hb_position(run.vertical, run.baseline_shift, scale, pos);
+        map_hb_position(run.vertical, baseline_shift, scale, pos);
 
       glyphs.push(GlyphPosition {
         glyph_id: info.glyph_id,
@@ -5098,7 +5137,7 @@ fn shape_font_run(run: &FontRun) -> Result<ShapedRun> {
     advance: inline_position,
     font: Arc::clone(&run.font),
     font_size: run.font_size,
-    baseline_shift: run.baseline_shift,
+    baseline_shift,
     language,
     synthetic_bold: run.synthetic_bold,
     synthetic_oblique: run.synthetic_oblique,
@@ -5107,7 +5146,7 @@ fn shape_font_run(run: &FontRun) -> Result<ShapedRun> {
     palette_overrides: Arc::clone(&run.palette_overrides),
     palette_override_hash: run.palette_override_hash,
     variations: run.variations.clone(),
-    scale: 1.0,
+    scale: run_scale,
   };
 
   recycle_unicode_buffer(output.clear());
@@ -5666,6 +5705,7 @@ impl ShapingPipeline {
       if diag_enabled {
         let glyphs: usize = shaped_runs.iter().map(|run| run.glyphs.len()).sum();
         record_text_shape(None, shaped_runs.len(), glyphs);
+        record_font_face_override_usage(&shaped_runs);
       }
       return Ok(shaped_runs);
     }
@@ -5735,6 +5775,9 @@ impl ShapingPipeline {
       .map(|_| shaped_runs.iter().map(|run| run.glyphs.len()).sum())
       .unwrap_or(0);
     record_text_shape(shape_timer, shaped_runs.len(), glyphs);
+    if diag_enabled {
+      record_font_face_override_usage(&shaped_runs);
+    }
     if let (Some(before), Some(after)) = (
       cache_stats_before,
       diag_enabled.then(|| self.font_cache.stats()),
@@ -6323,6 +6366,7 @@ mod tests {
         family: "Test".to_string(),
         data: Arc::new(Vec::new()),
         index: 0,
+        face_metrics_overrides: crate::text::font_db::FontFaceMetricsOverrides::default(),
         weight: DbFontWeight::NORMAL,
         style: DbFontStyle::Normal,
         stretch: DbFontStretch::Normal,
@@ -6603,6 +6647,83 @@ mod tests {
       assert!((a.y_offset - b.y_offset).abs() < 0.0001);
     }
     assert!((shaped_fast.advance - shaped_slow.advance).abs() < 0.0001);
+  }
+
+  #[test]
+  fn size_adjust_scales_shaping_advances() {
+    let data = Arc::new(include_bytes!("../../tests/fixtures/fonts/DejaVuSans-subset.ttf").to_vec());
+    let base_font = Arc::new(LoadedFont {
+      id: None,
+      family: "DejaVu Sans".to_string(),
+      data: Arc::clone(&data),
+      index: 0,
+      face_metrics_overrides: crate::text::font_db::FontFaceMetricsOverrides::default(),
+      weight: DbFontWeight::NORMAL,
+      style: DbFontStyle::Normal,
+      stretch: DbFontStretch::Normal,
+    });
+    let mut overrides = crate::text::font_db::FontFaceMetricsOverrides::default();
+    overrides.size_adjust = 2.0;
+    let adjusted_font = Arc::new(LoadedFont {
+      id: None,
+      family: "DejaVu Sans".to_string(),
+      data: Arc::clone(&data),
+      index: 0,
+      face_metrics_overrides: overrides,
+      weight: DbFontWeight::NORMAL,
+      style: DbFontStyle::Normal,
+      stretch: DbFontStretch::Normal,
+    });
+
+    let features = Arc::from(Vec::<Feature>::new().into_boxed_slice());
+    let text = "Hello";
+    let make_run = |font: Arc<LoadedFont>| FontRun {
+      text: text.to_string(),
+      start: 0,
+      end: text.len(),
+      font,
+      synthetic_bold: 0.0,
+      synthetic_oblique: 0.0,
+      script: Script::Latin,
+      direction: Direction::LeftToRight,
+      level: 0,
+      font_size: 16.0,
+      baseline_shift: 0.0,
+      language: None,
+      features: Arc::clone(&features),
+      variations: Vec::new(),
+      palette_index: 0,
+      palette_overrides: Arc::new(Vec::new()),
+      palette_override_hash: 0,
+      rotation: RunRotation::None,
+      vertical: false,
+    };
+
+    let shaped_base = shape_font_run(&make_run(Arc::clone(&base_font))).expect("shape base run");
+    let shaped_adjusted =
+      shape_font_run(&make_run(Arc::clone(&adjusted_font))).expect("shape adjusted run");
+
+    assert!(
+      (shaped_base.scale - 1.0).abs() < 1e-6,
+      "expected base run scale 1.0, got {}",
+      shaped_base.scale
+    );
+    assert!(
+      (shaped_adjusted.scale - 2.0).abs() < 1e-6,
+      "expected adjusted run scale 2.0, got {}",
+      shaped_adjusted.scale
+    );
+    assert_eq!(
+      shaped_base.glyphs.len(),
+      shaped_adjusted.glyphs.len(),
+      "size-adjust should not change shaping output glyph count"
+    );
+    assert!(
+      (shaped_adjusted.advance - shaped_base.advance * 2.0).abs() < 0.01,
+      "expected adjusted advance to scale by 2.0 ({} vs {})",
+      shaped_adjusted.advance,
+      shaped_base.advance
+    );
   }
 
   #[test]
@@ -7134,6 +7255,7 @@ mod tests {
           family: "Test".to_string(),
           data: Arc::new(Vec::new()),
           index: 0,
+          face_metrics_overrides: crate::text::font_db::FontFaceMetricsOverrides::default(),
           weight: DbFontWeight::NORMAL,
           style: DbFontStyle::Normal,
           stretch: DbFontStretch::Normal,
@@ -8960,6 +9082,7 @@ mod tests {
       id: None,
       data: Arc::new(Vec::new()),
       index: 0,
+      face_metrics_overrides: crate::text::font_db::FontFaceMetricsOverrides::default(),
       family: name.into(),
       weight: DbFontWeight::NORMAL,
       style: DbFontStyle::Normal,

@@ -20,6 +20,7 @@ fn renders_sbix_jpeg_bitmap_glyph() {
     weight: FontWeight::NORMAL,
     style: FontStyle::Normal,
     stretch: FontStretch::Normal,
+    face_metrics_overrides: Default::default(),
   };
   let face = font.as_ttf_face().expect("fixture font should parse");
   let glyph_id = face.glyph_index('A').expect("fixture should map A").0 as u32;

@@ -51,6 +51,7 @@ fn variable_font() -> LoadedFont {
     weight: FontWeight::NORMAL,
     style: FontStyle::Normal,
     stretch: FontStretch::Normal,
+    face_metrics_overrides: Default::default(),
   }
 }
 
@@ -124,6 +125,7 @@ fn load_color_font(path: &str, family: &str) -> LoadedFont {
     weight: FontWeight::NORMAL,
     style: FontStyle::Normal,
     stretch: FontStretch::Normal,
+    face_metrics_overrides: Default::default(),
   }
 }
 
@@ -194,6 +196,7 @@ fn get_color_test_font() -> Option<LoadedFont> {
     weight: FontWeight::NORMAL,
     style: FontStyle::Normal,
     stretch: FontStretch::Normal,
+    face_metrics_overrides: Default::default(),
   })
 }
 

@@ -44,6 +44,7 @@ use crate::text::face_cache;
 use crate::text::font_db::FontCacheConfig;
 use crate::text::font_db::FontConfig;
 use crate::text::font_db::FontDatabase;
+use crate::text::font_db::FontFaceMetricsOverrides;
 use crate::text::font_db::FontStretch;
 use crate::text::font_db::FontStyle;
 use crate::text::font_db::FontWeight;
@@ -1626,6 +1627,12 @@ impl FontContext {
       family,
       data,
       index,
+      metrics_overrides: FontFaceMetricsOverrides {
+        size_adjust: face.size_adjust.unwrap_or(1.0),
+        ascent_override: face.ascent_override,
+        descent_override: face.descent_override,
+        line_gap_override: face.line_gap_override,
+      },
       style: face.style.clone(),
       display: face.display,
       weight: face.weight,
@@ -1869,11 +1876,12 @@ impl FontContext {
     if text.is_empty() {
       return 0.0;
     }
+    let effective_font_size = font_size * font.face_metrics_overrides.size_adjust;
 
     // Get rustybuzz face for shaping
     let rb_face = match Face::from_slice(&font.data, font.index) {
       Some(face) => face,
-      None => return self.estimate_text_width(text, font_size),
+      None => return self.estimate_text_width(text, effective_font_size),
     };
 
     // Shape the text
@@ -1886,7 +1894,7 @@ impl FontContext {
 
     // Calculate scale from font units to pixels
     let units_per_em = rb_face.units_per_em() as f32;
-    let scale = font_size / units_per_em;
+    let scale = effective_font_size / units_per_em;
 
     // Sum up horizontal advances
     let mut width: f32 = 0.0;
@@ -1923,13 +1931,14 @@ impl FontContext {
         is_shaped: false,
       };
     }
+    let effective_font_size = font_size * font.face_metrics_overrides.size_adjust;
 
     // Get rustybuzz face for shaping
     let rb_face = match Face::from_slice(&font.data, font.index) {
       Some(face) => face,
       None => {
         return TextMeasurement {
-          width: self.estimate_text_width(text, font_size),
+          width: self.estimate_text_width(text, effective_font_size),
           glyph_count: text.chars().count(),
           is_shaped: false,
         };
@@ -1946,7 +1955,7 @@ impl FontContext {
 
     // Calculate scale from font units to pixels
     let units_per_em = rb_face.units_per_em() as f32;
-    let scale = font_size / units_per_em;
+    let scale = effective_font_size / units_per_em;
 
     // Sum up horizontal advances
     let mut width: f32 = 0.0;
@@ -1986,7 +1995,43 @@ impl FontContext {
   /// }
   /// ```
   pub fn get_scaled_metrics(&self, font: &LoadedFont, font_size: f32) -> Option<ScaledMetrics> {
-    font.metrics().ok().map(|m| m.scale(font_size))
+    let metrics = font.metrics().ok()?;
+    let overrides = font.face_metrics_overrides;
+    let size_adjust = if overrides.size_adjust.is_finite() && overrides.size_adjust > 0.0 {
+      overrides.size_adjust
+    } else {
+      1.0
+    };
+    let effective_font_size = font_size * size_adjust;
+    let mut scaled = metrics.scale(effective_font_size);
+
+    if overrides.has_metric_overrides() {
+      // Metric override descriptors are percentages of the face's used font size, which already
+      // includes the `size-adjust` scaling factor when specified.
+      if let Some(multiplier) = overrides
+        .ascent_override
+        .filter(|v| v.is_finite() && *v >= 0.0)
+      {
+        scaled.ascent = multiplier * effective_font_size;
+      }
+      if let Some(multiplier) = overrides
+        .descent_override
+        .filter(|v| v.is_finite() && *v >= 0.0)
+      {
+        scaled.descent = multiplier * effective_font_size;
+      }
+      if let Some(multiplier) = overrides
+        .line_gap_override
+        .filter(|v| v.is_finite() && *v >= 0.0)
+      {
+        scaled.line_gap = multiplier * effective_font_size;
+      }
+
+      // `line-height: normal` is based on the sum of ascent, descent, and line-gap.
+      scaled.line_height = scaled.ascent + scaled.descent + scaled.line_gap;
+    }
+
+    Some(scaled)
   }
 
   /// Returns the parsed MATH table for the given font if present.
@@ -2016,7 +2061,8 @@ impl FontContext {
 
   /// Returns math constants scaled to the given font size.
   pub fn math_constants(&self, font: &LoadedFont, font_size: f32) -> Option<MathConstants> {
-    let scale = font.metrics().ok()?.scale(font_size).scale;
+    let effective_font_size = font_size * font.face_metrics_overrides.size_adjust;
+    let scale = font.metrics().ok()?.scale(effective_font_size).scale;
     let table = self.math_table(font)?;
     let constants = table.table.constants?;
     let mut out = MathConstants::default();
@@ -2138,7 +2184,8 @@ impl FontContext {
     glyph_id: u16,
     font_size: f32,
   ) -> Option<f32> {
-    let scale = font.metrics().ok()?.scale(font_size).scale;
+    let effective_font_size = font_size * font.face_metrics_overrides.size_adjust;
+    let scale = font.metrics().ok()?.scale(effective_font_size).scale;
     let table = self.math_table(font)?;
     let glyph_info = table.table.glyph_info.as_ref()?;
     let corrections = glyph_info.italic_corrections.as_ref()?;
@@ -2155,7 +2202,8 @@ impl FontContext {
     superscript: bool,
     side: MathKernSide,
   ) -> f32 {
-    let Some(scale) = font.metrics().ok().map(|m| m.scale(font_size).scale) else {
+    let effective_font_size = font_size * font.face_metrics_overrides.size_adjust;
+    let Some(scale) = font.metrics().ok().map(|m| m.scale(effective_font_size).scale) else {
       return 0.0;
     };
     let Some(table) = self.math_table(font) else {
@@ -2193,7 +2241,8 @@ impl FontContext {
     vertical: bool,
     font_size: f32,
   ) -> Option<(ttf_parser::math::GlyphConstruction<'static>, f32)> {
-    let scale = font.metrics().ok()?.scale(font_size).scale;
+    let effective_font_size = font_size * font.face_metrics_overrides.size_adjust;
+    let scale = font.metrics().ok()?.scale(effective_font_size).scale;
     let table = self.math_table(font)?;
     let variants = table.table.variants?;
     let constructions = if vertical {
@@ -2217,6 +2266,7 @@ pub(crate) struct WebFontFace {
   family: String,
   data: Arc<Vec<u8>>,
   index: u32,
+  metrics_overrides: FontFaceMetricsOverrides,
   style: FontFaceStyle,
   #[allow(dead_code)]
   display: FontDisplay,
@@ -2257,6 +2307,7 @@ impl WebFontFace {
       id: None,
       data: Arc::clone(&self.data),
       index: self.index,
+      face_metrics_overrides: self.metrics_overrides,
       family: family.to_string(),
       weight: FontWeight::new(weight),
       style,
@@ -3043,6 +3094,85 @@ mod tests {
   }
 
   #[test]
+  fn scaled_metrics_apply_font_face_metric_overrides_after_size_adjust() {
+    let data = Arc::new(include_bytes!("../../tests/fixtures/fonts/DejaVuSans-subset.ttf").to_vec());
+    let font = LoadedFont {
+      id: None,
+      data: Arc::clone(&data),
+      index: 0,
+      face_metrics_overrides: FontFaceMetricsOverrides {
+        size_adjust: 1.0634,
+        ascent_override: Some(0.9309),
+        descent_override: Some(0.2539),
+        line_gap_override: Some(0.0),
+      },
+      family: "DejaVu Sans".to_string(),
+      weight: FontWeight::NORMAL,
+      style: FontStyle::Normal,
+      stretch: FontStretch::Normal,
+    };
+    let ctx = FontContext::empty();
+
+    let font_size = 64.0;
+    let effective_font_size = font_size * font.face_metrics_overrides.size_adjust;
+    let base_scaled = font
+      .metrics()
+      .expect("font metrics")
+      .scale(effective_font_size);
+    let scaled = ctx
+      .get_scaled_metrics(&font, font_size)
+      .expect("scaled metrics");
+
+    assert!(
+      (scaled.font_size - effective_font_size).abs() < 1e-4,
+      "expected scaled metrics font_size {} (effective), got {}",
+      effective_font_size,
+      scaled.font_size
+    );
+    assert!(
+      (scaled.scale - base_scaled.scale).abs() < 1e-6,
+      "expected scale {}, got {}",
+      base_scaled.scale,
+      scaled.scale
+    );
+    assert_eq!(
+      scaled.x_height, base_scaled.x_height,
+      "x-height should scale with the adjusted font size"
+    );
+
+    // Metric override descriptors are percentages of the face's used font size (after applying
+    // `size-adjust`).
+    let expected_ascent = effective_font_size * 0.9309;
+    let expected_descent = effective_font_size * 0.2539;
+    let expected_line_gap = 0.0;
+    let expected_line_height = expected_ascent + expected_descent + expected_line_gap;
+    assert!(
+      (scaled.ascent - expected_ascent).abs() < 1e-3,
+      "expected ascent {}, got {}",
+      expected_ascent,
+      scaled.ascent
+    );
+    assert!(
+      (scaled.descent - expected_descent).abs() < 1e-3,
+      "expected descent {}, got {}",
+      expected_descent,
+      scaled.descent
+    );
+    assert!(
+      (scaled.line_gap - expected_line_gap).abs() < 1e-6,
+      "expected line gap {}, got {}",
+      expected_line_gap,
+      scaled.line_gap
+    );
+    assert!(
+      (scaled.line_height - expected_line_height).abs() < 1e-3,
+      "expected line height {}, got {}",
+      expected_line_height,
+      scaled.line_height
+    );
+  }
+
+  #[test]
   fn fetch_font_bytes_decodes_data_url_case_insensitive_scheme() {
     let (bytes, content_type) =
       fetch_font_bytes("DATA:font/woff2;base64,aGk=").expect("fetch data url font bytes");
@@ -3354,6 +3484,7 @@ mod tests {
       family: "WebFontCacheTest".to_string(),
       data,
       index: 0,
+      metrics_overrides: FontFaceMetricsOverrides::default(),
       style: FontFaceStyle::Normal,
       display: FontDisplay::Swap,
       weight: (400, 400),

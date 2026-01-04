@@ -37,6 +37,7 @@ fn load_test_font() -> LoadedFont {
     weight: FontWeight::NORMAL,
     style: FontStyle::Normal,
     stretch: FontStretch::Normal,
+    face_metrics_overrides: Default::default(),
   }
 }
 
@@ -225,6 +226,7 @@ fn load_variable_test_font() -> LoadedFont {
     weight: FontWeight::NORMAL,
     style: FontStyle::Normal,
     stretch: FontStretch::Normal,
+    face_metrics_overrides: Default::default(),
   }
 }
 
@@ -238,6 +240,7 @@ fn load_variable_clip_font() -> LoadedFont {
     weight: FontWeight::NORMAL,
     style: FontStyle::Normal,
     stretch: FontStretch::Normal,
+    face_metrics_overrides: Default::default(),
   }
 }
 
@@ -251,6 +254,7 @@ fn load_gvar_test_font() -> LoadedFont {
     weight: FontWeight::NORMAL,
     style: FontStyle::Normal,
     stretch: FontStretch::Normal,
+    face_metrics_overrides: Default::default(),
   }
 }
 

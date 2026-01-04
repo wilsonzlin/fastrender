@@ -2071,6 +2071,13 @@ pub struct RenderCounts {
   pub box_nodes: Option<usize>,
   pub fragments: Option<usize>,
   pub shaped_runs: Option<usize>,
+  /// Count of shaped runs that used an `@font-face` `size-adjust` descriptor.
+  #[serde(default)]
+  pub font_face_size_adjust_runs: Option<usize>,
+  /// Count of shaped runs that used `@font-face` metric overrides (`ascent-override`,
+  /// `descent-override`, or `line-gap-override`).
+  #[serde(default)]
+  pub font_face_metric_override_runs: Option<usize>,
   pub glyphs: Option<usize>,
   pub color_glyph_rasters: Option<usize>,
   pub shaping_cache_hits: Option<u64>,
@@ -2522,6 +2529,8 @@ fn merge_text_diagnostics(stats: &mut RenderStats) {
     stats.timings.text_shape_cpu_ms = Some(text.shape_ms);
     stats.timings.text_rasterize_cpu_ms = Some(text.rasterize_ms);
     stats.counts.shaped_runs = Some(text.shaped_runs);
+    stats.counts.font_face_size_adjust_runs = Some(text.font_face_size_adjust_runs);
+    stats.counts.font_face_metric_override_runs = Some(text.font_face_metric_override_runs);
     stats.counts.glyphs = Some(text.glyphs);
     stats.counts.color_glyph_rasters = Some(text.color_glyph_rasters);
     stats.counts.shaping_cache_hits = Some(text.shaping_cache_hits);
@@ -4018,8 +4027,7 @@ impl FastRender {
         stretch,
       )
       .or_else(|| self.font_context.get_sans_serif())
-      .and_then(|font| font.metrics().ok())
-      .map(|m| m.scale(style.font_size))
+      .and_then(|font| self.font_context.get_scaled_metrics(&font, style.font_size))
   }
 
   fn box_generation_options(&self) -> BoxGenerationOptions {
@@ -9866,7 +9874,7 @@ impl FastRender {
     let viewport = Size::new(self.default_width as f32, self.default_height as f32);
     let line_height =
       compute_line_height_with_metrics_viewport(style, metrics_scaled.as_ref(), Some(viewport));
-    let metrics = TextItem::metrics_from_runs(&runs, line_height, style.font_size);
+    let metrics = TextItem::metrics_from_runs(&self.font_context, &runs, line_height, style.font_size);
     let width: f32 = runs.iter().map(|r| r.advance).sum();
     let height = metrics.height;
 
@@ -14013,8 +14021,7 @@ mod tests {
           stretch,
         )
         .or_else(|| renderer.font_context().get_sans_serif())
-        .and_then(|font| font.metrics().ok())
-        .map(|m| m.scale(style.font_size))
+        .and_then(|font| renderer.font_context().get_scaled_metrics(&font, style.font_size))
     };
     let viewport = Size::new(
       renderer.default_width as f32,
@@ -14022,7 +14029,7 @@ mod tests {
     );
     let line_height =
       compute_line_height_with_metrics_viewport(&style, scaled.as_ref(), Some(viewport));
-    let metrics = TextItem::metrics_from_runs(&runs, line_height, style.font_size);
+    let metrics = TextItem::metrics_from_runs(renderer.font_context(), &runs, line_height, style.font_size);
     let expected = Size::new(runs.iter().map(|r| r.advance).sum(), metrics.height);
 
     let intrinsic = replaced.intrinsic_size.expect("alt intrinsic size");

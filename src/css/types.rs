@@ -2304,6 +2304,25 @@ pub struct FontFaceRule {
   pub stretch: (f32, f32),
   /// Unicode ranges that this face covers (inclusive start,end).
   pub unicode_ranges: Vec<(u32, u32)>,
+  /// Scales the effective font size for this face (CSS Fonts 4 `size-adjust` descriptor).
+  ///
+  /// Stored as a multiplier (e.g. `106.34%` => `1.0634`).
+  pub size_adjust: Option<f32>,
+  /// Overrides ascent used for line layout (`ascent-override`).
+  ///
+  /// Stored as a multiplier of the face's used font size (e.g. `90%` => `0.9`). The `normal`
+  /// keyword maps to `None`. The used font size includes any `size-adjust` scaling.
+  pub ascent_override: Option<f32>,
+  /// Overrides descent used for line layout (`descent-override`).
+  ///
+  /// Stored as a multiplier of the face's used font size (e.g. `20%` => `0.2`). The `normal`
+  /// keyword maps to `None`. The used font size includes any `size-adjust` scaling.
+  pub descent_override: Option<f32>,
+  /// Overrides line gap used for line layout (`line-gap-override`).
+  ///
+  /// Stored as a multiplier of the face's used font size (e.g. `0%` => `0.0`). The `normal`
+  /// keyword maps to `None`. The used font size includes any `size-adjust` scaling.
+  pub line_gap_override: Option<f32>,
 }
 
 impl Default for FontFaceRule {
@@ -2316,6 +2335,10 @@ impl Default for FontFaceRule {
       weight: (400, 400),
       stretch: (100.0, 100.0),
       unicode_ranges: vec![(0, 0x10ffff)],
+      size_adjust: None,
+      ascent_override: None,
+      descent_override: None,
+      line_gap_override: None,
     }
   }
 }

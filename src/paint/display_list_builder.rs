@@ -928,8 +928,7 @@ impl DisplayListBuilder {
         stretch,
       )
       .or_else(|| font_ctx.get_sans_serif())
-      .and_then(|font| font.metrics().ok())
-      .map(|m| m.scale(style.font_size))
+      .and_then(|font| font_ctx.get_scaled_metrics(&font, style.font_size))
   }
 
   fn element_scroll_offset(&self, fragment: &FragmentNode) -> Point {
@@ -6819,7 +6818,7 @@ impl DisplayListBuilder {
     let viewport = self.viewport.map(|(w, h)| Size::new(w, h));
     let line_height =
       compute_line_height_with_metrics_viewport(style, metrics_scaled.as_ref(), viewport);
-    let metrics = InlineTextItem::metrics_from_runs(&runs, line_height, style.font_size);
+    let metrics = InlineTextItem::metrics_from_runs(&self.font_ctx, &runs, line_height, style.font_size);
     let half_leading = (metrics.line_height - (metrics.ascent + metrics.descent)) / 2.0;
     let baseline = rect.y() + half_leading + metrics.baseline_offset;
 
@@ -7280,7 +7279,7 @@ fn collect_underline_exclusions(
     if units_per_em == 0.0 {
       continue;
     }
-    let scale = run.font_size / units_per_em;
+    let scale = run.font_size / units_per_em * run.scale;
     let run_origin = if run.direction.is_rtl() {
       pen_x + run.advance
     } else {
@@ -9631,6 +9630,7 @@ mod tests {
       id: None,
       data,
       index: 0,
+      face_metrics_overrides: crate::text::font_db::FontFaceMetricsOverrides::default(),
       family: "RobotoFlex".to_string(),
       weight: crate::text::font_db::FontWeight::NORMAL,
       style: FontStyle::Normal,

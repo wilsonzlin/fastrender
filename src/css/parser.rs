@@ -2151,6 +2151,38 @@ fn parse_font_face_descriptors<'i, 't>(
           face.unicode_ranges = ranges;
         }
       }
+      "size-adjust" => {
+        if let Some(multiplier) = parse_percentage_multiplier(trimmed_value).filter(|v| *v > 0.0) {
+          face.size_adjust = Some(multiplier);
+        }
+      }
+      "ascent-override" => {
+        if trimmed_value.eq_ignore_ascii_case("normal") {
+          face.ascent_override = None;
+        } else if let Some(multiplier) =
+          parse_percentage_multiplier(trimmed_value).filter(|v| *v >= 0.0)
+        {
+          face.ascent_override = Some(multiplier);
+        }
+      }
+      "descent-override" => {
+        if trimmed_value.eq_ignore_ascii_case("normal") {
+          face.descent_override = None;
+        } else if let Some(multiplier) =
+          parse_percentage_multiplier(trimmed_value).filter(|v| *v >= 0.0)
+        {
+          face.descent_override = Some(multiplier);
+        }
+      }
+      "line-gap-override" => {
+        if trimmed_value.eq_ignore_ascii_case("normal") {
+          face.line_gap_override = None;
+        } else if let Some(multiplier) =
+          parse_percentage_multiplier(trimmed_value).filter(|v| *v >= 0.0)
+        {
+          face.line_gap_override = Some(multiplier);
+        }
+      }
       _ => {}
     }
   }
@@ -3313,6 +3345,19 @@ fn parse_stretch_token(token: &str) -> Option<f32> {
     "ultra-expanded" => Some(200.0),
     _ => None,
   }
+}
+
+fn parse_percentage_multiplier(value: &str) -> Option<f32> {
+  let trimmed = value.trim();
+  let stripped = trimmed.strip_suffix('%')?.trim();
+  if stripped.is_empty() {
+    return None;
+  }
+  stripped
+    .parse::<f32>()
+    .ok()
+    .filter(|v| v.is_finite())
+    .map(|v| v / 100.0)
 }
 
 fn split_selector_components(selector_text: &str) -> Vec<String> {
@@ -4758,6 +4803,61 @@ mod tests {
       }
       other => panic!("Unexpected rule: {:?}", other),
     }
+  }
+
+  #[test]
+  fn parses_font_face_metric_override_descriptors() {
+    let css = r#"
+      @font-face {
+        font-family: "MetricOverrides";
+        src: local(TestLocal);
+        size-adjust: 106.34%;
+        ascent-override: 90%;
+        descent-override: normal;
+        line-gap-override: 0%;
+      }
+
+      @font-face {
+        font-family: "MetricOverridesInvalid";
+        src: local(TestLocal);
+        size-adjust: nope;
+        ascent-override: -10%;
+        descent-override: 20;
+        line-gap-override: normal;
+      }
+    "#;
+    let stylesheet = parse_stylesheet(css).unwrap();
+    assert_eq!(stylesheet.rules.len(), 2);
+
+    let CssRule::FontFace(face) = &stylesheet.rules[0] else {
+      panic!("expected first rule to be @font-face");
+    };
+    assert_eq!(face.family.as_deref(), Some("MetricOverrides"));
+    assert!(
+      face.size_adjust.is_some_and(|v| (v - 1.0634).abs() < 1e-6),
+      "expected size-adjust multiplier 1.0634, got {:?}",
+      face.size_adjust
+    );
+    assert!(
+      face.ascent_override.is_some_and(|v| (v - 0.9).abs() < 1e-6),
+      "expected ascent-override multiplier 0.9, got {:?}",
+      face.ascent_override
+    );
+    assert_eq!(face.descent_override, None);
+    assert!(
+      face.line_gap_override.is_some_and(|v| v.abs() < 1e-6),
+      "expected line-gap-override multiplier 0.0, got {:?}",
+      face.line_gap_override
+    );
+
+    let CssRule::FontFace(face) = &stylesheet.rules[1] else {
+      panic!("expected second rule to be @font-face");
+    };
+    assert_eq!(face.family.as_deref(), Some("MetricOverridesInvalid"));
+    assert_eq!(face.size_adjust, None);
+    assert_eq!(face.ascent_override, None);
+    assert_eq!(face.descent_override, None);
+    assert_eq!(face.line_gap_override, None);
   }
 
   #[test]

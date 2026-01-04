@@ -19,6 +19,7 @@ fn loaded_font() -> LoadedFont {
     weight: FontWeight::NORMAL,
     style: FontStyle::Normal,
     stretch: FontStretch::Normal,
+    face_metrics_overrides: Default::default(),
   }
 }
 

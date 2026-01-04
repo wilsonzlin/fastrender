@@ -18,6 +18,7 @@ fn load_variable_font() -> Option<LoadedFont> {
     weight: FontWeight::NORMAL,
     style: FontStyle::Normal,
     stretch: FontStretch::Normal,
+    face_metrics_overrides: Default::default(),
   })
 }
 

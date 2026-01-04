@@ -3092,7 +3092,8 @@ impl InlineFormattingContext {
       style.word_spacing,
     );
 
-    let metrics = TextItem::metrics_from_runs(&shaped_runs, line_height, style.font_size);
+    let metrics =
+      TextItem::metrics_from_runs(&self.font_context, &shaped_runs, line_height, style.font_size);
 
     // Find break opportunities and filter based on white-space handling
     let base_breaks = find_break_opportunities(&hyphen_free);
@@ -3448,7 +3449,9 @@ impl InlineFormattingContext {
 
     let preferred_aspect = preferred_font_aspect(style, &self.font_context);
     let used_font_size = compute_adjusted_font_size(style, &font, preferred_aspect);
-    let glyph_advance = crate::text::pipeline::notdef_advance_for_font(&font, used_font_size);
+    let run_scale = font.face_metrics_overrides.size_adjust;
+    let glyph_advance =
+      crate::text::pipeline::notdef_advance_for_font(&font, used_font_size * run_scale);
 
     let (direction, level) = bidi_context
       .map(|ctx| {
@@ -3511,7 +3514,7 @@ impl InlineFormattingContext {
       palette_overrides: Arc::new(Vec::new()),
       palette_override_hash: 0,
       variations: Vec::new(),
-      scale: 1.0,
+      scale: run_scale,
     }]
   }
 
@@ -3800,10 +3803,7 @@ impl InlineFormattingContext {
       .or_else(|| self.font_context.get_sans_serif())
       .and_then(|font| {
         let used_font_size = compute_adjusted_font_size(style, &font, preferred_aspect);
-        font
-          .metrics()
-          .ok()
-          .map(|metrics| metrics.scale(used_font_size))
+        self.font_context.get_scaled_metrics(&font, used_font_size)
       })
   }
 
@@ -12694,7 +12694,7 @@ mod tests {
     let mut style = ComputedStyle::default();
     style.font_size = 16.0;
     let style = Arc::new(style);
-    let metrics = TextItem::metrics_from_runs(&[], 16.0, style.font_size);
+    let metrics = TextItem::metrics_from_runs(&ctx.font_context, &[], 16.0, style.font_size);
     let item = TextItem::new(
       Vec::new(),
       "a\u{0301}".to_string(),
@@ -12720,7 +12720,7 @@ mod tests {
     let mut style = ComputedStyle::default();
     style.font_size = 16.0;
     let style = Arc::new(style);
-    let metrics = TextItem::metrics_from_runs(&[], 16.0, style.font_size);
+    let metrics = TextItem::metrics_from_runs(&ctx.font_context, &[], 16.0, style.font_size);
     let text = "👨\u{200D}👩";
     let item = TextItem::new(
       Vec::new(),

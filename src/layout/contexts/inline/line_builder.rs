@@ -571,6 +571,7 @@ impl TextItem {
 
   /// Derive baseline metrics from shaped runs and CSS line-height
   pub fn metrics_from_runs(
+    font_context: &FontContext,
     runs: &[ShapedRun],
     line_height: f32,
     fallback_font_size: f32,
@@ -581,8 +582,7 @@ impl TextItem {
     let mut x_height: Option<f32> = None;
 
     for run in runs {
-      if let Ok(metrics) = run.font.metrics() {
-        let scaled = metrics.scale(run.font_size);
+      if let Some(scaled) = font_context.get_scaled_metrics(run.font.as_ref(), run.font_size) {
         ascent = ascent.max(scaled.ascent);
         descent = descent.max(scaled.descent);
         line_gap = line_gap.max(scaled.line_gap);
@@ -698,8 +698,10 @@ impl TextItem {
     };
 
     let line_height = self.metrics.line_height;
-    let before_metrics = TextItem::metrics_from_runs(&before_runs, line_height, self.font_size);
-    let after_metrics = TextItem::metrics_from_runs(&after_runs, line_height, self.font_size);
+    let before_metrics =
+      TextItem::metrics_from_runs(font_context, &before_runs, line_height, self.font_size);
+    let after_metrics =
+      TextItem::metrics_from_runs(font_context, &after_runs, line_height, self.font_size);
 
     let mut before_item = TextItem::new(
       before_runs,
@@ -759,8 +761,10 @@ impl TextItem {
     if before_item.advance <= 0.0 || after_item.advance <= 0.0 {
       let before_runs = reshape_cache.shape(self, 0..split_offset, shaper, font_context)?;
       let after_runs = reshape_cache.shape(self, split_offset..text_len, shaper, font_context)?;
-      let before_metrics = TextItem::metrics_from_runs(&before_runs, line_height, self.font_size);
-      let after_metrics = TextItem::metrics_from_runs(&after_runs, line_height, self.font_size);
+      let before_metrics =
+        TextItem::metrics_from_runs(font_context, &before_runs, line_height, self.font_size);
+      let after_metrics =
+        TextItem::metrics_from_runs(font_context, &after_runs, line_height, self.font_size);
       before_item = TextItem::new(
         before_runs,
         before_text_owned.unwrap_or_else(|| before_text.to_string()),
@@ -3191,7 +3195,8 @@ fn slice_text_item(
     item.style.word_spacing,
   );
 
-  let metrics = TextItem::metrics_from_runs(&runs, item.metrics.line_height, item.font_size);
+  let metrics =
+    TextItem::metrics_from_runs(font_context, &runs, item.metrics.line_height, item.font_size);
   let breaks = item
     .break_opportunities
     .iter()
@@ -3556,7 +3561,7 @@ mod tests {
       )
       .expect("text shaping should succeed in tests");
     TextItem::apply_spacing_to_runs(&mut runs, text, style.letter_spacing, style.word_spacing);
-    let metrics = TextItem::metrics_from_runs(&runs, 16.0, style.font_size);
+    let metrics = TextItem::metrics_from_runs(font_context, &runs, 16.0, style.font_size);
     let breaks = find_break_opportunities(text);
     let mut item = TextItem::new(
       runs,
@@ -3726,7 +3731,8 @@ mod tests {
     let font_context = FontContext::new();
     let mut runs = shaper.shape(text, &style, &font_context).unwrap();
     TextItem::apply_spacing_to_runs(&mut runs, text, style.letter_spacing, style.word_spacing);
-    let metrics = TextItem::metrics_from_runs(&runs, style.font_size, style.font_size);
+    let metrics =
+      TextItem::metrics_from_runs(&font_context, &runs, style.font_size, style.font_size);
 
     let item = TextItem::new(
       runs,
@@ -3768,7 +3774,8 @@ mod tests {
     let font_context = FontContext::new();
     let mut runs = shaper.shape(text, &style, &font_context).unwrap();
     TextItem::apply_spacing_to_runs(&mut runs, text, style.letter_spacing, style.word_spacing);
-    let metrics = TextItem::metrics_from_runs(&runs, style.font_size, style.font_size);
+    let metrics =
+      TextItem::metrics_from_runs(&font_context, &runs, style.font_size, style.font_size);
 
     let item = TextItem::new(
       runs,
@@ -5728,7 +5735,7 @@ mod tests {
         pipeline_dir_from_style(Direction::Ltr),
       )
       .expect("shape");
-    let metrics = TextItem::metrics_from_runs(&runs, 16.0, style.font_size);
+    let metrics = TextItem::metrics_from_runs(&font_ctx, &runs, 16.0, style.font_size);
     let breaks = vec![BreakOpportunity::with_hyphen(1, BreakType::Allowed, true)];
     let item = TextItem::new(
       runs,
@@ -5766,7 +5773,7 @@ mod tests {
         pipeline_dir_from_style(Direction::Ltr),
       )
       .expect("shape");
-    let metrics = TextItem::metrics_from_runs(&runs, 16.0, style.font_size);
+    let metrics = TextItem::metrics_from_runs(&font_ctx, &runs, 16.0, style.font_size);
     let item = TextItem::new(
       runs,
       text.to_string(),
@@ -5801,7 +5808,7 @@ mod tests {
         pipeline_dir_from_style(Direction::Ltr),
       )
       .expect("shape");
-    let metrics = TextItem::metrics_from_runs(&runs, 16.0, style.font_size);
+    let metrics = TextItem::metrics_from_runs(&font_ctx, &runs, 16.0, style.font_size);
     let item = TextItem::new(
       runs,
       text.to_string(),
@@ -5832,7 +5839,7 @@ mod tests {
         pipeline_dir_from_style(Direction::Ltr),
       )
       .expect("shape");
-    let euro_metrics = TextItem::metrics_from_runs(&euro_runs, 16.0, style.font_size);
+    let euro_metrics = TextItem::metrics_from_runs(&font_ctx, &euro_runs, 16.0, style.font_size);
     let breaks = vec![BreakOpportunity::new(1, BreakType::Allowed)];
     let euro_item = TextItem::new(
       euro_runs,
@@ -5887,7 +5894,7 @@ mod tests {
         pipeline_dir_from_style(Direction::Ltr),
       )
       .expect("shape");
-    let metrics = TextItem::metrics_from_runs(&runs, 16.0, style.font_size);
+    let metrics = TextItem::metrics_from_runs(&font_ctx, &runs, 16.0, style.font_size);
     let item = TextItem::new(
       runs,
       text.to_string(),

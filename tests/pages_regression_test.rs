@@ -390,6 +390,11 @@ const PAGE_FIXTURES: &[PageFixture] = &[
     html: "image_grid_picture_showcase/index.html",
     shots: DEFAULT_SHOTS,
   },
+  PageFixture {
+    name: "font_face_metric_overrides",
+    html: "font_face_metric_overrides/index.html",
+    shots: DEFAULT_SHOTS,
+  },
 ];
 
 fn fixtures_dir() -> PathBuf {
@@ -410,6 +415,19 @@ fn golden_path(name: &str) -> PathBuf {
 
 fn should_update_goldens() -> bool {
   std::env::var("UPDATE_PAGES_GOLDEN").is_ok()
+}
+
+fn fixture_filter() -> Option<Vec<String>> {
+  std::env::var("PAGES_FIXTURE_FILTER")
+    .ok()
+    .map(|value| {
+      value
+        .split(',')
+        .map(|part| part.trim().to_string())
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+    })
+    .filter(|parts| !parts.is_empty())
 }
 
 fn base_url_for(html_path: &Path) -> Result<String, String> {
@@ -492,10 +510,16 @@ fn pages_regression_suite() {
   // and 3D/backdrop ordering differences.
   compare_config.max_different_percent = compare_config.max_different_percent.max(40.0);
 
+  let filter = fixture_filter();
   thread::Builder::new()
     .stack_size(64 * 1024 * 1024)
     .spawn(move || {
       for fixture in PAGE_FIXTURES {
+        if let Some(filter) = filter.as_ref() {
+          if !filter.iter().any(|name| name == fixture.name) {
+            continue;
+          }
+        }
         run_fixture(fixture, &compare_config)
           .unwrap_or_else(|e| panic!("Page '{}' failed: {}", fixture.name, e));
       }

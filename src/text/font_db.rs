@@ -740,6 +740,40 @@ impl From<fontdb::Stretch> for FontStretch {
   }
 }
 
+/// Metric overrides attached to an `@font-face` rule (CSS Fonts 4).
+///
+/// These descriptors are commonly used to make fallback faces (usually `local()` system fonts)
+/// match the metrics of a remote webfont, reducing layout shift.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FontFaceMetricsOverrides {
+  /// `size-adjust` multiplier (e.g. `106.34%` => `1.0634`).
+  pub size_adjust: f32,
+  /// `ascent-override` multiplier of the face's used font size (after applying `size-adjust`).
+  pub ascent_override: Option<f32>,
+  /// `descent-override` multiplier of the face's used font size (after applying `size-adjust`).
+  pub descent_override: Option<f32>,
+  /// `line-gap-override` multiplier of the face's used font size (after applying `size-adjust`).
+  pub line_gap_override: Option<f32>,
+}
+
+impl Default for FontFaceMetricsOverrides {
+  fn default() -> Self {
+    Self {
+      size_adjust: 1.0,
+      ascent_override: None,
+      descent_override: None,
+      line_gap_override: None,
+    }
+  }
+}
+
+impl FontFaceMetricsOverrides {
+  #[inline]
+  pub fn has_metric_overrides(&self) -> bool {
+    self.ascent_override.is_some() || self.descent_override.is_some() || self.line_gap_override.is_some()
+  }
+}
+
 /// A loaded font with cached data
 ///
 /// Contains the font binary data (shared via Arc) along with
@@ -765,6 +799,10 @@ pub struct LoadedFont {
   pub data: Arc<Vec<u8>>,
   /// Font index within the file (for TTC font collections)
   pub index: u32,
+  /// `@font-face` metric overrides for this font face.
+  ///
+  /// System font lookups use the default (no overrides).
+  pub face_metrics_overrides: FontFaceMetricsOverrides,
   /// Font family name
   pub family: String,
   /// Font weight
@@ -1454,6 +1492,7 @@ impl FontDatabase {
       id: Some(FontId::new(id)),
       data,
       index: face_info.index,
+      face_metrics_overrides: FontFaceMetricsOverrides::default(),
       family: face_info
         .families
         .first()

@@ -880,8 +880,7 @@ impl Painter {
         stretch,
       )
       .or_else(|| self.font_ctx.get_sans_serif())
-      .and_then(|font| font.metrics().ok())
-      .map(|m| m.scale(style.font_size))
+      .and_then(|font| self.font_ctx.get_scaled_metrics(&font, style.font_size))
   }
 
   fn resolve_scaled_metrics_static(
@@ -906,8 +905,7 @@ impl Painter {
         stretch,
       )
       .or_else(|| font_ctx.get_sans_serif())
-      .and_then(|font| font.metrics().ok())
-      .map(|m| m.scale(style.font_size))
+      .and_then(|font| font_ctx.get_scaled_metrics(&font, style.font_size))
   }
 
   fn element_scroll_offset(&self, fragment: &FragmentNode) -> Point {
@@ -7333,7 +7331,7 @@ impl Painter {
       metrics_scaled.as_ref(),
       Some(Size::new(self.css_width, self.css_height)),
     );
-    let metrics = TextItem::metrics_from_runs(&runs, line_height, style.font_size);
+    let metrics = TextItem::metrics_from_runs(&self.font_ctx, &runs, line_height, style.font_size);
     let half_leading = (metrics.line_height - (metrics.ascent + metrics.descent)) / 2.0;
     let baseline_y = rect.y() + half_leading + metrics.baseline_offset;
 
@@ -8665,6 +8663,7 @@ impl Painter {
         let mark_width: f32 = mark_runs.iter().map(|r| r.advance * self.scale).sum();
         let mark_metrics =
           crate::layout::contexts::inline::line_builder::TextItem::metrics_from_runs(
+            &self.font_ctx,
             &mark_runs,
             mark_style.font_size,
             mark_style.font_size,
@@ -8685,7 +8684,7 @@ impl Painter {
           if units_per_em == 0.0 {
             continue;
           }
-          let scale = (run.font_size / units_per_em) * self.scale;
+          let scale = (run.font_size / units_per_em) * run.scale * self.scale;
           let mut pen_inline = if run.direction.is_rtl() { advance } else { 0.0 };
           let mut pen_block = 0.0_f32;
           for glyph in &run.glyphs {
@@ -13370,6 +13369,7 @@ mod tests {
       id: None,
       data: font_bytes.clone(),
       index: 0,
+      face_metrics_overrides: crate::text::font_db::FontFaceMetricsOverrides::default(),
       family: "Roboto Flex".to_string(),
       weight: crate::text::font_db::FontWeight::NORMAL,
       style: crate::text::font_db::FontStyle::Normal,
