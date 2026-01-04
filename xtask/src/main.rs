@@ -13,6 +13,7 @@ mod fixture_chrome_diff;
 mod fixture_determinism;
 mod import_page_fixture;
 mod recapture_page_fixtures;
+mod sync_progress_accuracy;
 mod update_pageset_guardrails;
 mod update_pageset_guardrails_budgets;
 mod validate_page_fixtures;
@@ -36,6 +37,9 @@ fn main() -> Result<()> {
     }
     Commands::RecapturePageFixtures(args) => {
       recapture_page_fixtures::run_recapture_page_fixtures(args)
+    }
+    Commands::SyncProgressAccuracy(args) => {
+      sync_progress_accuracy::run_sync_progress_accuracy(args)
     }
     Commands::UpdatePagesetGuardrails(args) => {
       update_pageset_guardrails::run_update_pageset_guardrails(args)
@@ -88,6 +92,8 @@ enum Commands {
   ChromeBaselineFixtures(chrome_baseline_fixtures::ChromeBaselineFixturesArgs),
   /// (Re)capture and (re)import offline page fixtures from a manifest
   RecapturePageFixtures(recapture_page_fixtures::RecapturePageFixturesArgs),
+  /// Sync deterministic fixture accuracy metrics into `progress/pages/*.json`
+  SyncProgressAccuracy(sync_progress_accuracy::SyncProgressAccuracyArgs),
   /// Update `tests/pages/pageset_guardrails.json` based on `progress/pages/*.json`
   #[command(alias = "update-pageset-timeouts")]
   UpdatePagesetGuardrails(update_pageset_guardrails::UpdatePagesetGuardrailsArgs),

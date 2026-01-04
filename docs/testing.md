@@ -73,6 +73,12 @@ cargo xtask chrome-baseline-fixtures --out-dir target/fixture_chrome_diff/chrome
 # (Re-runs steps 1-2 by default; pass `--no-chrome` to reuse `target/fixture_chrome_diff/chrome`;
 # pass `--no-build` to reuse an existing `target/release/diff_renders` binary.)
 cargo xtask fixture-chrome-diff
+
+# 4) Sync deterministic pixel/perceptual diff telemetry into `progress/pages/*.json`:
+cargo xtask sync-progress-accuracy --report target/fixture_chrome_diff/report.json
+
+# `pageset_progress report --rank-accuracy` now reflects the deterministic fixture diffs.
+cargo run --release --bin pageset_progress -- report --rank-accuracy
 ```
 
 Defaults are aligned with the `pages_regression` suite (`viewport=1040x1240`, `dpr=1.0`) unless you override them.
