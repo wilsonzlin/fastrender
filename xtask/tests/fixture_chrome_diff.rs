@@ -64,6 +64,8 @@ fn dry_run_prints_deterministic_plan_and_forwards_args() {
       "800x600",
       "--dpr",
       "2",
+      "--jobs",
+      "3",
       "--media",
       "print",
       "--timeout",
@@ -125,6 +127,10 @@ fn dry_run_prints_deterministic_plan_and_forwards_args() {
   assert!(
     render_line.contains("--timeout 12"),
     "render_fixtures should receive timeout; got:\n{render_line}"
+  );
+  assert!(
+    render_line.contains("--jobs 3"),
+    "render_fixtures should receive jobs; got:\n{render_line}"
   );
   assert!(
     render_line.contains("--media print"),
