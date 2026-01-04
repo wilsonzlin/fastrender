@@ -223,6 +223,7 @@ when available and rescaled so buckets sum (within rounding error) to `total_ms`
 - **Diffs**: `diff_renders`
 - **Deterministic fixture evidence**: `render_fixtures`, `cargo xtask chrome-baseline-fixtures`, `cargo xtask fixture-chrome-diff`
 - **Offline repros**: `bundle_page` + `cargo xtask import-page-fixture`
+- **Fixture maintenance**: `cargo xtask recapture-page-fixtures` (manifest-driven capture/import) and `cargo xtask validate-page-fixtures` (offline invariant check)
 - **Inspection**: `inspect_frag`
 - **Debug/perf docs**: `docs/debugging.md`, `docs/env-vars.md`, `docs/instrumentation.md`, `docs/profiling-linux.md`
 
