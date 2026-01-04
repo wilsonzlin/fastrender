@@ -91,3 +91,21 @@ fn webkit_background_clip_text_is_aliased() {
   let css = r"div { -webkit-background-clip: text; }";
   assert_eq!(render_div_background_clip(css), BackgroundBox::Text);
 }
+
+#[test]
+fn supports_vendor_prefixed_properties_are_case_insensitive() {
+  let css = r"@supports (-WeBkIt-TrAnSfOrM: rotate(10deg)) { div { display: inline; } }";
+  assert_eq!(render_div_display(css), "inline");
+}
+
+#[test]
+fn supports_vendor_prefixed_backdrop_filter_matches() {
+  let css = r"@supports (-webkit-backdrop-filter: blur(1px)) { div { display: inline; } }";
+  assert_eq!(render_div_display(css), "inline");
+}
+
+#[test]
+fn supports_legacy_ms_grid_properties_remain_unsupported() {
+  let css = r"@supports (-ms-grid-row: 1) { div { display: inline; } }";
+  assert_eq!(render_div_display(css), "block");
+}

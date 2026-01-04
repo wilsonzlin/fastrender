@@ -52,9 +52,6 @@ pub fn supports_declaration(property: &str, value: &str) -> bool {
   let canonical_property = if is_known_style_property(normalized_property) {
     normalized_property
   } else if let Some(alias) = vendor_prefixed_property_alias(normalized_property) {
-    if !is_known_style_property(alias) {
-      return false;
-    }
     alias
   } else {
     return false;

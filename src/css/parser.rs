@@ -3999,24 +3999,16 @@ fn intern_property_name(property: &str, context: DeclarationContext) -> Option<P
 }
 
 fn lookup_known_property(property: &str, context: DeclarationContext) -> Option<&'static str> {
-  let direct = match context {
-    DeclarationContext::Style => known_style_property_set().get(property).copied(),
+  match context {
+    DeclarationContext::Style => known_style_property_set()
+      .get(property)
+      .copied()
+      .or_else(|| vendor_prefixed_property_alias(property)),
     DeclarationContext::Page => known_page_property_set()
       .get(property)
       .copied()
-      .or_else(|| known_style_property_set().get(property).copied()),
-  };
-  if direct.is_some() {
-    return direct;
-  }
-
-  let canonical = vendor_prefixed_property_alias(property)?;
-  match context {
-    DeclarationContext::Style => known_style_property_set().get(canonical).copied(),
-    DeclarationContext::Page => known_page_property_set()
-      .get(canonical)
-      .copied()
-      .or_else(|| known_style_property_set().get(canonical).copied()),
+      .or_else(|| known_style_property_set().get(property).copied())
+      .or_else(|| vendor_prefixed_property_alias(property)),
   }
 }
 
