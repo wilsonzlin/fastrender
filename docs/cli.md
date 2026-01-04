@@ -181,7 +181,7 @@ cargo run --release --bin diff_renders -- \
 
 Notes:
 - This is not fully deterministic (live subresources can change); it’s still excellent for rapid “why is our render different from Chrome on the same HTML?” debugging.
-- Set `CHROME_BIN=/path/to/chrome` if auto-detection fails.
+- Pass `--chrome /path/to/chrome` (or set `CHROME_BIN=/path/to/chrome`) if auto-detection fails.
 - Entry: `src/bin/render_pages.rs`
 - Run: `cargo run --release --bin render_pages -- --help`
 - HTTP fetch tuning: honors the `FASTR_HTTP_*` env vars described above (see [`docs/env-vars.md#http-fetch-tuning`](env-vars.md#http-fetch-tuning)).
