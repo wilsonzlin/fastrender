@@ -191,6 +191,7 @@ Notes:
 - Offline policy: fixtures are rendered **without network access**; only `file://` and `data:` subresources are allowed.
 - Fonts: uses bundled fonts (`FontConfig::bundled_only`) so outputs are stable across machines.
 - Output: by default writes `<fixture>.png` into `target/fixture_renders/` (override with `--out-dir`).
+- Optional diagnostics: `--diagnostics-json` writes `<fixture>.diagnostics.json` next to each PNG (uses `DiagnosticsLevel::Basic`).
 - Core flags:
   - Selection: `--only <csv>` and/or positional fixture names.
   - Paths: `--fixtures-root <dir>`, `--out-dir <dir>`.
@@ -215,6 +216,10 @@ Notes:
   - `cargo xtask fixture-chrome-diff` (writes `target/fixture_chrome_diff/report.html` and prints the path)
   - Reuse a previously generated Chrome render directory: `cargo xtask fixture-chrome-diff --chrome-dir <dir>`
   - For advanced filtering/output control, see `cargo xtask fixture-chrome-diff --help` (supports `--only`, `--viewport`, `--dpr`, and diff tolerances).
+- Output layout:
+  - `<out>/chrome/<fixture>.png` (+ `<fixture>.chrome.log`)
+  - `<out>/fastrender/<fixture>.png` (+ optional `<fixture>.diagnostics.json` when `render_fixtures --diagnostics-json` is enabled)
+  - `<out>/report.html`, `<out>/report.json`
 
 ## `fetch_and_render`
 
