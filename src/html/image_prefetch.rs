@@ -897,4 +897,33 @@ mod tests {
       ]
     );
   }
+
+  #[test]
+  fn unused_declarative_shadow_templates_are_skipped() {
+    let html = r#"
+      <div id="host">
+        <template shadowroot="open"><img src="good.jpg"></template>
+        <template shadowroot="open"><img src="bad.jpg"></template>
+      </div>
+    "#;
+    let dom = parse_html(html).unwrap();
+
+    let media_ctx = media_ctx_for((800.0, 600.0), 1.0);
+    let ctx = ctx_for((800.0, 600.0), 1.0, &media_ctx, "https://example.com/");
+    let out = discover_image_prefetch_urls(
+      &dom,
+      ctx,
+      ImagePrefetchLimits {
+        max_image_elements: 10,
+        max_urls_per_element: 2,
+      },
+    );
+
+    assert_eq!(out.image_elements, 1);
+    assert!(!out.limited);
+    assert_eq!(
+      out.urls,
+      vec!["https://example.com/good.jpg".to_string()]
+    );
+  }
 }

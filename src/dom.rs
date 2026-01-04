@@ -2456,19 +2456,17 @@ fn parse_shadow_root_definition(template: &DomNode) -> Option<(ShadowRootMode, b
   Some((mode, delegates_focus))
 }
 
+/// Returns true if `node` is a `<template>` element whose contents should be treated as inert.
+///
+/// `parse_html` promotes the first declarative shadow DOM template for each host into a
+/// `DomNodeType::ShadowRoot`, leaving any remaining `<template>` nodes (including unused
+/// `<template shadowroot=...>` siblings) in the light DOM. Those remaining templates behave as
+/// inert template contents for all post-parse traversals (CSS extraction, prefetch discovery, etc).
 pub(crate) fn is_inert_html_template(node: &DomNode) -> bool {
-  if !matches!(
+  matches!(
     node.tag_name(),
     Some(tag) if tag.eq_ignore_ascii_case("template")
-  ) {
-    return false;
-  }
-
-  if !matches!(node.namespace(), Some(ns) if ns.is_empty() || ns == HTML_NAMESPACE) {
-    return true;
-  }
-
-  parse_shadow_root_definition(node).is_none()
+  )
 }
 
 fn attach_shadow_roots(node: &mut DomNode, deadline_counter: &mut usize) -> Result<()> {
@@ -2505,10 +2503,8 @@ fn attach_shadow_roots(node: &mut DomNode, deadline_counter: &mut usize) -> Resu
       for idx in (0..len).rev() {
         let child_ptr = unsafe { children_ptr.add(idx) };
         let child = unsafe { &*child_ptr };
-        if is_inert_html_template(child) {
-          continue;
-        }
-
+        // Template contents are inert; only the first declarative shadow DOM template is walked so
+        // nested declarative shadow roots inside it can be promoted.
         if matches!(child.tag_name(), Some(tag) if tag.eq_ignore_ascii_case("template"))
           && first_declarative_shadow_template != Some(idx)
         {
@@ -6847,7 +6843,7 @@ mod tests {
   }
 
   #[test]
-  fn inert_html_template_helper_matches_shadowroot_semantics() {
+  fn inert_html_template_helper_treats_all_templates_as_inert() {
     let missing_attr = DomNode {
       node_type: DomNodeType::Element {
         tag_name: "template".to_string(),
@@ -6876,7 +6872,7 @@ mod tests {
       },
       children: vec![],
     };
-    assert!(!is_inert_html_template(&open_attr));
+    assert!(is_inert_html_template(&open_attr));
 
     let closed_attr = DomNode {
       node_type: DomNodeType::Element {
@@ -6886,7 +6882,7 @@ mod tests {
       },
       children: vec![],
     };
-    assert!(!is_inert_html_template(&closed_attr));
+    assert!(is_inert_html_template(&closed_attr));
   }
 
   #[test]

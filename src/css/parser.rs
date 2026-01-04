@@ -48,7 +48,7 @@ use super::types::StyleRule;
 use super::types::StyleSheet;
 use super::types::SupportsCondition;
 use super::types::SupportsRule;
-use crate::dom::{DomNode, DomNodeType, HTML_NAMESPACE};
+use crate::dom::{DomNode, DomNodeType};
 use crate::error::{Error, RenderError, RenderStage, Result};
 use crate::render_control::{check_active, check_active_periodic};
 use crate::style::color::Color;
@@ -4238,31 +4238,17 @@ pub fn rel_list_contains_stylesheet(tokens: &[String]) -> bool {
     .any(|token| token.eq_ignore_ascii_case("stylesheet"))
 }
 
-/// Returns true if the node is a `<template>` whose contents should remain inert for styling.
+/// Returns true if the node is a `<template>` whose subtree should be treated as inert.
+///
+/// `parse_html` promotes declarative shadow DOM templates into `DomNodeType::ShadowRoot` nodes.
+/// Any `<template>` nodes that remain in the parsed tree (including unused
+/// `<template shadowroot=...>` siblings) are inert and must be ignored by traversal helpers such
+/// as CSS extraction.
 fn is_inert_template(node: &DomNode) -> bool {
-  // Template contents are inert unless the template declares a shadow root (handled elsewhere).
-  if !node
+  node
     .tag_name()
     .map(|tag| tag.eq_ignore_ascii_case("template"))
     .unwrap_or(false)
-  {
-    return false;
-  }
-
-  if let Some(namespace) = node.namespace() {
-    if !(namespace.is_empty() || namespace == HTML_NAMESPACE) {
-      return true;
-    }
-  }
-
-  let Some(mode_attr) = node
-    .get_attribute_ref("shadowroot")
-    .or_else(|| node.get_attribute_ref("shadowrootmode"))
-  else {
-    return true;
-  };
-
-  !(mode_attr.eq_ignore_ascii_case("open") || mode_attr.eq_ignore_ascii_case("closed"))
 }
 
 /// Extract inline `<style>` blocks and external `<link>` entries from a DOM.
@@ -5371,6 +5357,32 @@ mod tests {
     assert_eq!(shadow_sources.len(), 1);
     match &shadow_sources[0] {
       StylesheetSource::Inline(inline) => assert!(inline.css.contains(".x")),
+      other => panic!("expected inline shadow stylesheet, got {:?}", other),
+    }
+  }
+
+  #[test]
+  fn unused_declarative_shadow_templates_are_inert() {
+    let html = r#"
+      <div id="host">
+        <template shadowroot="open"><style>#a{}</style></template>
+        <template shadowroot="open"><style>#bad{}</style></template>
+      </div>
+    "#;
+    let dom = crate::dom::parse_html(html).unwrap();
+    let sources = extract_scoped_css_sources(&dom);
+    assert!(
+      sources.document.is_empty(),
+      "unused declarative shadow templates should not contribute document styles"
+    );
+    assert_eq!(sources.shadows.len(), 1);
+    let (_, shadow_sources) = sources.shadows.iter().next().unwrap();
+    assert_eq!(shadow_sources.len(), 1);
+    match &shadow_sources[0] {
+      StylesheetSource::Inline(inline) => {
+        assert!(inline.css.contains("#a"));
+        assert!(!inline.css.contains("#bad"));
+      }
       other => panic!("expected inline shadow stylesheet, got {:?}", other),
     }
   }
