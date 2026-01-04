@@ -1336,7 +1336,10 @@ impl TextItem {
     let left_advance = boundary.run_advance;
 
     for glyph in &mut right_glyphs {
-      glyph.x_offset -= left_advance;
+      match run_axis {
+        InlineAxis::Horizontal => glyph.x_offset -= left_advance,
+        InlineAxis::Vertical => glyph.y_offset -= left_advance,
+      }
       glyph.cluster = glyph.cluster.saturating_sub(local as u32);
     }
 
@@ -3316,10 +3319,14 @@ mod tests {
   use crate::layout::contexts::inline::explicit_bidi_context;
   use crate::render_control::{with_deadline, RenderDeadline};
   use crate::style::types::FontKerning;
+  use crate::style::types::TextOrientation;
+  use crate::style::types::WritingMode;
   use crate::style::ComputedStyle;
+  use crate::text::font_db::FontDatabase;
   use crate::text::font_loader::FontContext;
   use crate::text::line_break::find_break_opportunities;
   use crate::text::pipeline::ShapingPipeline;
+  use std::path::PathBuf;
   use std::sync::Arc;
   use std::time::Duration;
   use unicode_bidi::level;
@@ -3794,6 +3801,171 @@ mod tests {
       .expect("split_at should succeed even at mid-codepoint offsets");
     assert_eq!(before.text, "a");
     assert_eq!(after.text, "😊b");
+  }
+
+  #[test]
+  fn split_runs_preserving_shaping_adjusts_offsets_for_vertical_runs() {
+    const EPS: f32 = 1e-4;
+    let text = "A B";
+    let split_offset = text
+      .char_indices()
+      .nth(1)
+      .expect("split after first char")
+      .0;
+
+    let font_data = std::fs::read(
+      PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/fonts/DejaVuSans-subset.ttf"),
+    )
+    .expect("fixture font should load");
+    let mut db = FontDatabase::empty();
+    db.load_font_data(font_data)
+      .expect("fixture font should parse");
+    db.refresh_generic_fallbacks();
+    let font_ctx = FontContext::with_database(Arc::new(db));
+
+    let mut style = ComputedStyle::default();
+    style.font_family = vec!["DejaVu Sans".to_string()].into();
+    style.writing_mode = WritingMode::VerticalRl;
+    style.text_orientation = TextOrientation::Upright;
+    let style = Arc::new(style);
+
+    let shaper = ShapingPipeline::new();
+    let mut runs = shaper
+      .shape(text, style.as_ref(), &font_ctx)
+      .expect("text should shape");
+    TextItem::apply_spacing_to_runs(&mut runs, text, style.letter_spacing, style.word_spacing);
+
+    assert!(
+      runs
+        .iter()
+        .flat_map(|run| &run.glyphs)
+        .any(|glyph| glyph.y_advance.abs() > f32::EPSILON),
+      "expected vertical shaping to populate y_advance"
+    );
+
+    let metrics = TextItem::metrics_from_runs(&runs, style.font_size, style.font_size);
+    let item = TextItem::new(
+      runs.clone(),
+      text.to_string(),
+      metrics,
+      find_break_opportunities(text),
+      Vec::new(),
+      style.clone(),
+      style.direction,
+    );
+
+    let boundary = item
+      .cluster_boundary_exact(split_offset)
+      .expect("expected cluster boundary at split offset");
+    let run_idx = boundary.run_index.expect("expected run index");
+    let glyph_split = boundary.glyph_end.expect("expected glyph boundary");
+    let left_advance = boundary.run_advance;
+    assert!(
+      left_advance.is_finite() && left_advance > 0.0,
+      "expected positive left advance, got {}",
+      left_advance
+    );
+
+    let run = item.runs.get(run_idx).expect("run exists");
+    let axis = run_inline_axis(run);
+    assert_eq!(axis, InlineAxis::Vertical);
+
+    let original_right_glyphs = run
+      .glyphs
+      .get(glyph_split..)
+      .expect("right glyph slice exists");
+    assert!(
+      !original_right_glyphs.is_empty(),
+      "expected glyphs on the right side of split (run_start={}, run_end={}, split_offset={}, glyph_split={}, glyphs_len={}, clusters={:?}, boundaries={:?})",
+      run.start,
+      run.end,
+      split_offset,
+      glyph_split,
+      run.glyphs.len(),
+      run.glyphs.iter().map(|g| g.cluster).collect::<Vec<_>>(),
+      item
+        .cluster_advances
+        .iter()
+        .map(|b| (b.byte_offset, b.run_index, b.glyph_end, b.run_advance, b.advance))
+        .collect::<Vec<_>>()
+    );
+
+    let (before_runs, after_runs) = item
+      .split_runs_preserving_shaping(split_offset)
+      .expect("split_runs_preserving_shaping should succeed");
+
+    let original_ids: Vec<u32> = item
+      .runs
+      .iter()
+      .flat_map(|run| run.glyphs.iter().map(|g| g.glyph_id))
+      .collect();
+    let split_ids: Vec<u32> = before_runs
+      .iter()
+      .chain(after_runs.iter())
+      .flat_map(|run| run.glyphs.iter().map(|g| g.glyph_id))
+      .collect();
+    assert_eq!(
+      split_ids, original_ids,
+      "preserving shaping should keep glyph IDs and ordering"
+    );
+
+    let right_run = after_runs.first().expect("expected right run");
+    let local = split_offset
+      .checked_sub(run.start)
+      .expect("split offset should be within run");
+    assert_eq!(
+      right_run.glyphs.len(),
+      original_right_glyphs.len(),
+      "split should preserve right-side glyph count"
+    );
+    for (orig, new) in original_right_glyphs.iter().zip(right_run.glyphs.iter()) {
+      assert_eq!(new.glyph_id, orig.glyph_id);
+      assert!(
+        (new.x_offset - orig.x_offset).abs() < EPS,
+        "cross-axis (x) offsets should remain unchanged for vertical runs"
+      );
+      assert!(
+        (new.y_offset - (orig.y_offset - left_advance)).abs() < EPS,
+        "inline-axis (y) offsets should be rebased by left_advance for vertical runs"
+      );
+      assert_eq!(
+        new.cluster,
+        orig.cluster.saturating_sub(local as u32),
+        "cluster indices should be rebased to the new run"
+      );
+    }
+
+    let before_text = &text[..split_offset];
+    let after_text = &text[split_offset..];
+    let before_metrics =
+      TextItem::metrics_from_runs(&before_runs, style.font_size, style.font_size);
+    let after_metrics = TextItem::metrics_from_runs(&after_runs, style.font_size, style.font_size);
+    let before_item = TextItem::new(
+      before_runs,
+      before_text.to_string(),
+      before_metrics,
+      find_break_opportunities(before_text),
+      Vec::new(),
+      style.clone(),
+      style.direction,
+    );
+    let after_item = TextItem::new(
+      after_runs,
+      after_text.to_string(),
+      after_metrics,
+      find_break_opportunities(after_text),
+      Vec::new(),
+      style.clone(),
+      style.direction,
+    );
+    assert!(
+      before_item.advance.is_finite() && before_item.advance > 0.0,
+      "before split TextItem advance should be finite and positive"
+    );
+    assert!(
+      after_item.advance.is_finite() && after_item.advance > 0.0,
+      "after split TextItem advance should be finite and positive"
+    );
   }
 
   #[test]
