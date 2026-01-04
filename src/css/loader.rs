@@ -3067,6 +3067,49 @@ mod tests {
   }
 
   #[test]
+  fn infer_base_url_ignores_canonical_inside_template_for_file_inputs() {
+    let html = r#"
+            <head>
+              <template><link rel="canonical" href="https://bad.example/poison/"></template>
+              <link rel="canonical" href="https://good.example/app/">
+            </head>
+        "#;
+    let base = infer_base_url(html, "file:///tmp/cache/example.html").into_owned();
+    assert_eq!(base, "https://good.example/app/");
+  }
+
+  #[test]
+  fn infer_base_url_ignores_canonical_inside_declarative_shadow_dom_for_file_inputs() {
+    let html = r#"
+            <head>
+              <div id="host">
+                <template shadowroot="open">
+                  <link rel="canonical" href="https://bad.example/poison/">
+                </template>
+              </div>
+              <link rel="canonical" href="https://good.example/app/">
+            </head>
+        "#;
+    let base = infer_base_url(html, "file:///tmp/cache/example.html").into_owned();
+    assert_eq!(base, "https://good.example/app/");
+  }
+
+  #[test]
+  fn infer_base_url_ignores_canonical_only_shadow_dom_for_file_inputs() {
+    let html = r#"
+            <head>
+              <div id="host">
+                <template shadowroot="open">
+                  <link rel="canonical" href="https://bad.example/poison/">
+                </template>
+              </div>
+            </head>
+        "#;
+    let base = infer_base_url(html, "file:///tmp/cache/example.net.html").into_owned();
+    assert_eq!(base, "https://example.net/");
+  }
+
+  #[test]
   fn infer_base_url_ignores_og_url_like_text_in_scripts_for_file_inputs() {
     let html = r#"
             <head>
@@ -3076,6 +3119,49 @@ mod tests {
         "#;
     let base = infer_base_url(html, "file:///tmp/cache/example.html").into_owned();
     assert_eq!(base, "https://good.example/app/");
+  }
+
+  #[test]
+  fn infer_base_url_ignores_og_url_inside_template_for_file_inputs() {
+    let html = r#"
+            <head>
+              <template><meta property="og:url" content="https://bad.example/poison/"></template>
+              <meta property="og:url" content="https://good.example/app/">
+            </head>
+        "#;
+    let base = infer_base_url(html, "file:///tmp/cache/example.html").into_owned();
+    assert_eq!(base, "https://good.example/app/");
+  }
+
+  #[test]
+  fn infer_base_url_ignores_og_url_inside_declarative_shadow_dom_for_file_inputs() {
+    let html = r#"
+            <head>
+              <div id="host">
+                <template shadowroot="open">
+                  <meta property="og:url" content="https://bad.example/poison/">
+                </template>
+              </div>
+              <meta property="og:url" content="https://good.example/app/">
+            </head>
+        "#;
+    let base = infer_base_url(html, "file:///tmp/cache/example.html").into_owned();
+    assert_eq!(base, "https://good.example/app/");
+  }
+
+  #[test]
+  fn infer_base_url_ignores_og_url_only_shadow_dom_for_file_inputs() {
+    let html = r#"
+            <head>
+              <div id="host">
+                <template shadowroot="open">
+                  <meta property="og:url" content="https://bad.example/poison/">
+                </template>
+              </div>
+            </head>
+        "#;
+    let base = infer_base_url(html, "file:///tmp/cache/example.org.html").into_owned();
+    assert_eq!(base, "https://example.org/");
   }
 
   #[test]
