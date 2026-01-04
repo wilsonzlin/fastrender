@@ -89,7 +89,7 @@ FASTR_HTTP_BACKEND=reqwest FASTR_HTTP_BROWSER_HEADERS=1 \
   - Supports directory diffs (recursive) and PNG file-to-file diffs.
   - Writes `diff_report.html` / `diff_report.json` into `--output` (diff images under `diff_report_files/diffs/`).
   - `--threshold` controls the per-channel tolerance passed through to the underlying `diff_renders --tolerance`.
-  - `--max-diff-percent`, `--max-perceptual-distance`, `--sort-by`, and `--shard` are forwarded to `diff_renders` (defaults match the historical `--max-diff-percent=0` behavior).
+  - `--ignore-alpha`, `--max-diff-percent`, `--max-perceptual-distance`, `--sort-by`, and `--shard` are forwarded to `diff_renders` (defaults match the historical `--max-diff-percent=0` behavior).
 - Chrome baseline screenshots for offline fixtures (local-only; not committed): `cargo xtask chrome-baseline-fixtures`
 - Chrome-vs-FastRender diff report for offline fixtures (deterministic; offline): `cargo xtask fixture-chrome-diff`
 - Import a bundled capture into a `pages_regression` fixture: `cargo xtask import-page-fixture <bundle_dir|.tar> <fixture_name> [--output-root tests/pages/fixtures --overwrite --dry-run]`

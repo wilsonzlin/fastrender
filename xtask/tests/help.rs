@@ -191,6 +191,25 @@ fn pageset_help_mentions_cache_dir() {
 }
 
 #[test]
+fn diff_renders_help_mentions_ignore_alpha() {
+  let output = Command::new(env!("CARGO_BIN_EXE_xtask"))
+    .args(["diff-renders", "--help"])
+    .output()
+    .expect("run cargo xtask diff-renders --help");
+
+  assert!(
+    output.status.success(),
+    "diff-renders help should exit successfully"
+  );
+
+  let stdout = String::from_utf8_lossy(&output.stdout);
+  assert!(
+    stdout.contains("--ignore-alpha"),
+    "diff-renders help should mention --ignore-alpha; got:\n{stdout}"
+  );
+}
+
+#[test]
 fn pageset_help_mentions_capture_missing_failure_fixtures() {
   let output = Command::new(env!("CARGO_BIN_EXE_xtask"))
     .args(["pageset", "--help"])

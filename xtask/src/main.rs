@@ -420,6 +420,10 @@ struct DiffRendersArgs {
   #[arg(long, value_enum, default_value_t = DiffRendersSortBy::Percent)]
   sort_by: DiffRendersSortBy,
 
+  /// Ignore alpha differences (forwarded to `diff_renders --ignore-alpha`).
+  #[arg(long)]
+  ignore_alpha: bool,
+
   /// Only diff a deterministic shard of the inputs (index/total, 0-based)
   #[arg(long, value_parser = parse_shard)]
   shard: Option<(usize, usize)>,
@@ -1602,6 +1606,9 @@ fn run_diff_renders(args: DiffRendersArgs) -> Result<()> {
     cmd
       .arg("--max-perceptual-distance")
       .arg(max.to_string());
+  }
+  if args.ignore_alpha {
+    cmd.arg("--ignore-alpha");
   }
   if let Some((index, total)) = args.shard {
     cmd.arg("--shard").arg(format!("{index}/{total}"));
