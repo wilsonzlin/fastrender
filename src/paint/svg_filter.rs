@@ -2782,7 +2782,9 @@ pub(crate) fn apply_svg_filter_with_cache(
     return Ok(());
   }
 
-  let Some(mut working_pixmap) = resize_pixmap(pixmap, working_w, working_h) else {
+  let Some(mut working_pixmap) =
+    resize_pixmap(pixmap, working_w, working_h, def.color_interpolation_filters)
+  else {
     apply_svg_filter_scaled(def, pixmap, scale, scale, bbox, blur_cache.as_deref_mut())?;
     return Ok(());
   };
@@ -2803,8 +2805,17 @@ pub(crate) fn apply_svg_filter_with_cache(
     blur_cache.as_deref_mut(),
   )?;
 
-  let Some(resized_back) = resize_pixmap(&working_pixmap, target_w, target_h) else {
-    apply_svg_filter_scaled(def, pixmap, scale, scale, bbox, blur_cache.as_deref_mut())?;
+  let Some(resized_back) =
+    resize_pixmap(&working_pixmap, target_w, target_h, def.color_interpolation_filters)
+  else {
+    apply_svg_filter_scaled(
+      def,
+      pixmap,
+      scale,
+      scale,
+      bbox,
+      blur_cache.as_deref_mut(),
+    )?;
     return Ok(());
   };
   *pixmap = resized_back;
@@ -2812,7 +2823,12 @@ pub(crate) fn apply_svg_filter_with_cache(
   Ok(())
 }
 
-fn resize_pixmap(source: &Pixmap, width: u32, height: u32) -> Option<Pixmap> {
+fn resize_pixmap(
+  source: &Pixmap,
+  width: u32,
+  height: u32,
+  color_interpolation_filters: ColorInterpolationFilters,
+) -> Option<Pixmap> {
   if width == 0 || height == 0 {
     return None;
   }
@@ -2830,7 +2846,17 @@ fn resize_pixmap(source: &Pixmap, width: u32, height: u32) -> Option<Pixmap> {
     width as f32 / source.width() as f32,
     height as f32 / source.height() as f32,
   );
-  out.draw_pixmap(0, 0, source.as_ref(), &paint, transform, None);
+  match color_interpolation_filters {
+    ColorInterpolationFilters::SRGB => {
+      out.draw_pixmap(0, 0, source.as_ref(), &paint, transform, None);
+    }
+    ColorInterpolationFilters::LinearRGB => {
+      let mut temp = source.clone();
+      reencode_pixmap_to_linear_rgb(&mut temp);
+      out.draw_pixmap(0, 0, temp.as_ref(), &paint, transform, None);
+      reencode_pixmap_to_srgb(&mut out);
+    }
+  }
   Some(out)
 }
 
@@ -6364,6 +6390,17 @@ mod filter_res_tests {
     pixmap
   }
 
+  fn assert_pixel_close(actual: (u8, u8, u8, u8), expected: (u8, u8, u8, u8)) {
+    let diff_ok = |a: u8, b: u8| (a as i16 - b as i16).abs() <= 1;
+    assert!(
+      diff_ok(actual.0, expected.0)
+        && diff_ok(actual.1, expected.1)
+        && diff_ok(actual.2, expected.2)
+        && diff_ok(actual.3, expected.3),
+      "expected {expected:?}, got {actual:?}"
+    );
+  }
+
   #[test]
   fn filter_res_downsamples_filter_graph() {
     let _guard = svg_filter_test_guard();
@@ -6464,6 +6501,52 @@ mod filter_res_tests {
         }
       }
     }
+  }
+
+  #[test]
+  fn filter_res_resampling_honors_color_interpolation_filters() {
+    let bbox = Rect::from_xywh(0.0, 0.0, 2.0, 1.0);
+
+    let apply = |cif: ColorInterpolationFilters| {
+      let mut filter = SvgFilter {
+        color_interpolation_filters: cif,
+        steps: vec![FilterStep {
+          result: None,
+          color_interpolation_filters: None,
+          primitive: FilterPrimitive::Offset {
+            input: FilterInput::SourceGraphic,
+            dx: 0.0,
+            dy: 0.0,
+          },
+          region: None,
+        }],
+        region: SvgFilterRegion {
+          x: SvgLength::Number(0.0),
+          y: SvgLength::Number(0.0),
+          width: SvgLength::Number(2.0),
+          height: SvgLength::Number(1.0),
+          units: SvgFilterUnits::UserSpaceOnUse,
+        },
+        filter_res: Some((1, 1)),
+        primitive_units: SvgFilterUnits::UserSpaceOnUse,
+        fingerprint: 0,
+      };
+      filter.refresh_fingerprint();
+
+      let mut pixmap = new_pixmap(2, 1).unwrap();
+      pixmap.pixels_mut()[0] = PremultipliedColorU8::from_rgba(0, 0, 0, 255).unwrap();
+      pixmap.pixels_mut()[1] = PremultipliedColorU8::from_rgba(255, 255, 255, 255).unwrap();
+      apply_svg_filter(&filter, &mut pixmap, 1.0, bbox).unwrap();
+      pixmap
+    };
+
+    let srgb = apply(ColorInterpolationFilters::SRGB);
+    assert_pixel_close(pixel(&srgb, 0, 0), (128, 128, 128, 255));
+    assert_eq!(pixel(&srgb, 0, 0), pixel(&srgb, 1, 0));
+
+    let linear = apply(ColorInterpolationFilters::LinearRGB);
+    assert_pixel_close(pixel(&linear, 0, 0), (188, 188, 188, 255));
+    assert_eq!(pixel(&linear, 0, 0), pixel(&linear, 1, 0));
   }
 }
 
