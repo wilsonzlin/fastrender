@@ -39,6 +39,7 @@ fn dry_run_prints_deterministic_plan_and_forwards_args() {
   write_fixture(&fixtures_root, "d");
 
   let out_dir = temp.path().join("out");
+  let target_dir = temp.path().join("target");
   let chrome_dir = temp.path().join("chrome-bin");
   fs::create_dir_all(&chrome_dir).expect("create chrome-bin dir");
   let fake_chrome = chrome_dir.join("chrome");
@@ -47,6 +48,7 @@ fn dry_run_prints_deterministic_plan_and_forwards_args() {
 
   let output = Command::new(env!("CARGO_BIN_EXE_xtask"))
     .current_dir(repo_root())
+    .env("CARGO_TARGET_DIR", &target_dir)
     .args([
       "fixture-chrome-diff",
       "--dry-run",
@@ -173,8 +175,12 @@ fn dry_run_prints_deterministic_plan_and_forwards_args() {
     "chrome-baseline-fixtures should receive fixtures filter and shard; got:\n{stdout}"
   );
 
+  let diff_renders_bin = target_dir.join("release").join(format!(
+    "diff_renders{}",
+    std::env::consts::EXE_SUFFIX
+  ));
   assert!(
-    stdout.contains("--bin diff_renders"),
+    stdout.contains(&diff_renders_bin.display().to_string()),
     "plan should include diff_renders invocation; got:\n{stdout}"
   );
   assert!(
@@ -199,9 +205,11 @@ fn dry_run_respects_no_chrome() {
   let fixtures_root = temp.path().join("fixtures");
   write_fixture(&fixtures_root, "a");
   let out_dir = temp.path().join("out");
+  let target_dir = temp.path().join("target");
 
   let output = Command::new(env!("CARGO_BIN_EXE_xtask"))
     .current_dir(repo_root())
+    .env("CARGO_TARGET_DIR", &target_dir)
     .args([
       "fixture-chrome-diff",
       "--dry-run",
@@ -227,8 +235,12 @@ fn dry_run_respects_no_chrome() {
     !stdout.contains("chrome-baseline-fixtures"),
     "plan should skip chrome-baseline-fixtures when --no-chrome is set; got:\n{stdout}"
   );
+  let diff_renders_bin = target_dir.join("release").join(format!(
+    "diff_renders{}",
+    std::env::consts::EXE_SUFFIX
+  ));
   assert!(
-    stdout.contains("--bin diff_renders"),
+    stdout.contains(&diff_renders_bin.display().to_string()),
     "plan should still include diff_renders; got:\n{stdout}"
   );
 }
@@ -242,6 +254,7 @@ fn end_to_end_runs_with_stub_cargo_and_fake_chrome() {
   write_fixture(&fixtures_root, "b");
 
   let out_dir = temp.path().join("out");
+  let target_dir = temp.path().join("target");
 
   let bin_dir = temp.path().join("bin");
   fs::create_dir_all(&bin_dir).expect("create stub bin dir");
@@ -252,7 +265,7 @@ fn end_to_end_runs_with_stub_cargo_and_fake_chrome() {
     r#"#!/usr/bin/env sh
 set -eu
 
-subcmd="${1:-}"
+subcommand="${1:-}"
 
 bin=""
 prev=""
@@ -264,12 +277,18 @@ for arg in "$@"; do
   prev="$arg"
 done
 
-# The fixture-chrome-diff command now builds `diff_renders` via `cargo build` and then executes the
-# built binary directly. When running under this test we stub `cargo`, so we need to create a fake
-# `target/release/diff_renders` executable during the build step.
-if [ "$subcmd" = "build" ] && [ "$bin" = "diff_renders" ]; then
-  mkdir -p target/release
-  cat > target/release/diff_renders <<'EOF'
+# The real `fixture-chrome-diff` builds the `diff_renders` binary and then executes it directly.
+# Emulate that by writing a stub `diff_renders` executable into the target dir when we see a
+# `cargo build --bin diff_renders` invocation.
+if [ "$subcommand" = "build" ] && [ "$bin" = "diff_renders" ]; then
+  out="${CARGO_TARGET_DIR:-target}"
+  case "$out" in
+    /*) ;;
+    *) out="$(pwd)/$out" ;;
+  esac
+  out="$out/release/diff_renders"
+  mkdir -p "$(dirname "$out")"
+  cat > "$out" <<'SH'
 #!/usr/bin/env sh
 set -eu
 
@@ -293,8 +312,8 @@ mkdir -p "$(dirname "$html")/${stem}_files/diffs"
 echo "PNG" > "$(dirname "$html")/${stem}_files/diffs/stub.png"
 echo "1 differences over threshold" >&2
 exit 1
-EOF
-  chmod +x target/release/diff_renders
+SH
+  chmod +x "$out"
   exit 0
 fi
 
@@ -323,27 +342,6 @@ case "$bin" in
       echo "PNG" > "$out/$name.png"
     done
     exit 0
-    ;;
-  diff_renders)
-    html=""
-    json=""
-    while [ "$#" -gt 0 ]; do
-      case "$1" in
-        --html) html="$2"; shift 2;;
-        --json) json="$2"; shift 2;;
-        *) shift;;
-      esac
-    done
-    mkdir -p "$(dirname "$html")"
-    mkdir -p "$(dirname "$json")"
-    echo "<!doctype html><title>stub diff</title>" > "$html"
-    echo "{}" > "$json"
-    stem="$(basename "$html")"
-    stem="${stem%.*}"
-    mkdir -p "$(dirname "$html")/${stem}_files/diffs"
-    echo "PNG" > "$(dirname "$html")/${stem}_files/diffs/stub.png"
-    echo "1 differences over threshold" >&2
-    exit 1
     ;;
   *)
     echo "stub cargo: unsupported --bin $bin" >&2
@@ -391,6 +389,7 @@ exit 0
   let output = Command::new(env!("CARGO_BIN_EXE_xtask"))
     .current_dir(repo_root())
     .env("PATH", path)
+    .env("CARGO_TARGET_DIR", &target_dir)
     .args([
       "fixture-chrome-diff",
       "--fixtures-dir",
