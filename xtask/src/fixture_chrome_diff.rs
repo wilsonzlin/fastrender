@@ -95,7 +95,7 @@ pub fn run_fixture_chrome_diff(args: FixtureChromeDiffArgs) -> Result<()> {
       &layout,
     )?)
   };
-  let diff_renders_exe = diff_renders_executable(&repo_root);
+  let diff_renders_exe = crate::diff_renders_executable(&repo_root);
   let diff_renders = build_diff_renders_command(&diff_renders_exe, &layout, &args)?;
 
   if args.dry_run {
@@ -282,16 +282,6 @@ fn build_diff_renders_command(
     cmd.arg("--ignore-alpha");
   }
   Ok(cmd)
-}
-
-fn diff_renders_executable(repo_root: &Path) -> PathBuf {
-  repo_root
-    .join("target")
-    .join("release")
-    .join(format!(
-      "diff_renders{}",
-      std::env::consts::EXE_SUFFIX
-    ))
 }
 
 fn clear_dir(path: &Path) -> Result<()> {

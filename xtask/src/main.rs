@@ -1483,6 +1483,21 @@ fn repo_root() -> PathBuf {
     .to_path_buf()
 }
 
+fn cargo_target_dir(repo_root: &Path) -> PathBuf {
+  match std::env::var_os("CARGO_TARGET_DIR").map(PathBuf::from) {
+    Some(path) if path.is_absolute() => path,
+    Some(path) => repo_root.join(path),
+    None => repo_root.join("target"),
+  }
+}
+
+fn diff_renders_executable(repo_root: &Path) -> PathBuf {
+  cargo_target_dir(repo_root).join("release").join(format!(
+    "diff_renders{}",
+    std::env::consts::EXE_SUFFIX
+  ))
+}
+
 fn run_render_page(args: RenderPageArgs) -> Result<()> {
   // Historically `cargo xtask render-page` interpreted relative file/output paths relative to the
   // caller's current directory. Keep that behaviour even though we run the underlying `cargo run`
@@ -1586,10 +1601,7 @@ fn run_diff_renders(args: DiffRendersArgs) -> Result<()> {
   println!("Building diff_renders...");
   run_command(build_cmd)?;
 
-  let exe = repo_root
-    .join("target")
-    .join("release")
-    .join(format!("diff_renders{}", std::env::consts::EXE_SUFFIX));
+  let exe = diff_renders_executable(&repo_root);
   let mut cmd = Command::new(&exe);
   cmd
     .arg("--before")
