@@ -2199,6 +2199,49 @@ mod tests {
   }
 
   #[test]
+  fn layer_composite_respects_parent_transform_set_before_push() {
+    let mut canvas = Canvas::new(8, 8, Rgba::WHITE).unwrap();
+    canvas.translate(-2.0, -1.0);
+
+    canvas.push_layer(1.0).unwrap();
+    let rect = Rect::from_xywh(3.0, 2.0, 4.0, 4.0);
+    canvas.draw_rect(rect, Rgba::RED);
+    canvas.pop_layer().unwrap();
+
+    let pixmap = canvas.into_pixmap();
+    assert_eq!(pixel(&pixmap, 3, 3), (255, 0, 0, 255));
+    assert_eq!(pixel(&pixmap, 0, 0), (255, 255, 255, 255));
+  }
+
+  #[test]
+  fn bounded_layer_composite_respects_parent_transform_set_before_push() {
+    let rect = Rect::from_xywh(3.0, 2.0, 4.0, 4.0);
+
+    let mut full = Canvas::new(8, 8, Rgba::WHITE).unwrap();
+    full.translate(-2.0, -1.0);
+    full.push_layer(1.0).unwrap();
+    full.draw_rect(rect, Rgba::RED);
+    full.pop_layer().unwrap();
+    let full_pixmap = full.into_pixmap();
+
+    let mut bounded = Canvas::new(8, 8, Rgba::WHITE).unwrap();
+    bounded.translate(-2.0, -1.0);
+    bounded
+      .push_layer_bounded(1.0, None, Rect::from_xywh(1.0, 1.0, 4.0, 4.0))
+      .unwrap();
+    bounded.draw_rect(rect, Rgba::RED);
+    bounded.pop_layer().unwrap();
+    let bounded_pixmap = bounded.into_pixmap();
+
+    assert_eq!(pixel(&bounded_pixmap, 3, 3), (255, 0, 0, 255));
+    assert_eq!(
+      bounded_pixmap.data(),
+      full_pixmap.data(),
+      "bounded layer should match full layer rendering under parent transforms"
+    );
+  }
+
+  #[test]
   fn bounded_layer_matches_full_layer_output() {
     let mut full = Canvas::new(8, 8, Rgba::WHITE).unwrap();
     full.push_layer(1.0).unwrap();
