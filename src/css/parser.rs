@@ -4306,16 +4306,6 @@ pub fn rel_list_contains_stylesheet(tokens: &[String]) -> bool {
     .any(|token| token.eq_ignore_ascii_case("stylesheet"))
 }
 
-/// Returns true if the node is a `<template>` whose subtree should be treated as inert.
-///
-/// `parse_html` promotes declarative shadow DOM templates into `DomNodeType::ShadowRoot` nodes.
-/// Any `<template>` nodes that remain in the parsed tree (including unused
-/// `<template shadowroot=...>` siblings) are inert and must be ignored by traversal helpers such
-/// as CSS extraction.
-fn is_inert_template(node: &DomNode) -> bool {
-  node.is_template_element()
-}
-
 /// Extract inline `<style>` blocks and external `<link>` entries from a DOM.
 ///
 /// Each stylesheet is tagged with the DOM tree scope it belongs to (document vs. a particular
@@ -4334,10 +4324,10 @@ pub fn extract_css_sources(dom: &DomNode) -> Vec<ScopedStylesheetSource> {
     path: &mut Vec<usize>,
     sources: &mut Vec<ScopedStylesheetSource>,
   ) {
+    if node.template_contents_are_inert() {
+      return;
+    }
     if let Some(tag) = node.tag_name() {
-      if tag.eq_ignore_ascii_case("template") {
-        return;
-      }
       if tag.eq_ignore_ascii_case("style") {
         let mut css = String::new();
         for child in node.children.iter() {
@@ -4373,10 +4363,6 @@ pub fn extract_css_sources(dom: &DomNode) -> Vec<ScopedStylesheetSource> {
           });
         }
       }
-    }
-
-    if is_inert_template(node) {
-      return;
     }
 
     let mut child_index = 0;
@@ -4459,7 +4445,7 @@ pub fn extract_scoped_css_sources(dom: &DomNode) -> ScopedStylesheetSources {
       }
     }
 
-    if is_inert_template(node) {
+    if node.template_contents_are_inert() {
       return;
     }
 
@@ -4489,7 +4475,7 @@ pub fn extract_css(dom: &DomNode) -> Result<StyleSheet> {
     if matches!(node.node_type, DomNodeType::ShadowRoot { .. }) {
       return;
     }
-    if is_inert_template(node) {
+    if node.template_contents_are_inert() {
       return;
     }
     if let Some(tag) = node.tag_name() {
@@ -5557,6 +5543,26 @@ mod tests {
       }
       other => panic!("expected inline shadow stylesheet, got {:?}", other),
     }
+  }
+
+  #[test]
+  fn style_inside_unpromoted_shadow_template_is_ignored() {
+    let html = r#"
+      <div id="host">
+        <template shadowroot="open"><span></span></template>
+        <template shadowroot="open"><style>.bad { color: red; }</style></template>
+      </div>
+    "#;
+    let dom = crate::dom::parse_html(html).unwrap();
+    let sources = extract_scoped_css_sources(&dom);
+    assert!(
+      sources.document.is_empty(),
+      "styles inside unpromoted declarative shadow templates should be ignored"
+    );
+    assert!(
+      sources.shadows.values().all(|shadow_sources| shadow_sources.is_empty()),
+      "expected no styles extracted from shadow roots"
+    );
   }
 
   #[test]

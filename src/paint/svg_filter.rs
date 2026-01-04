@@ -5398,7 +5398,6 @@ mod tests {
       MAX_SVG_FILTER_DEPTH
     );
   }
-
   fn apply_primitive_for_test(
     prim: &FilterPrimitive,
     pixmap: &Pixmap,

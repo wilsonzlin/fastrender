@@ -342,19 +342,6 @@ fn node_is_html_element(node: &DomNode) -> bool {
   )
 }
 
-#[inline]
-fn node_is_html_template_element(node: &DomNode) -> bool {
-  matches!(
-    node.node_type,
-    DomNodeType::Element {
-      ref tag_name,
-      ref namespace,
-      ..
-    } if (namespace.is_empty() || namespace == HTML_NAMESPACE)
-      && tag_name.eq_ignore_ascii_case("template")
-  )
-}
-
 const SELECTOR_BLOOM_ASCII_LOWERCASE_STACK_BUF: usize = 64;
 
 #[inline]
@@ -780,7 +767,7 @@ fn build_selector_bloom_store_impl<const WORDS: usize>(
   let root_id = summaries.len();
   summaries.push([0u64; WORDS]);
   let root_is_element = root.is_element();
-  let root_is_template = node_is_html_template_element(root);
+  let root_is_template = root.is_template_element();
   let mut root_summary = [0u64; WORDS];
   if root_is_element {
     add_selector_bloom_hashes_internal(root, quirks_mode, &mut |hash| {
@@ -808,7 +795,7 @@ fn build_selector_bloom_store_impl<const WORDS: usize>(
       summaries.push([0u64; WORDS]);
 
       let child_is_element = child.is_element();
-      let child_is_template = node_is_html_template_element(child);
+      let child_is_template = child.is_template_element();
       let mut child_summary = [0u64; WORDS];
       if child_is_element {
         add_selector_bloom_hashes_internal(child, quirks_mode, &mut |hash| {
@@ -873,7 +860,7 @@ fn build_selector_bloom_map_legacy<const WORDS: usize>(
       } else {
         Some(walk(child, map))
       };
-      if node.is_element() {
+      if node.is_element() && !node.template_contents_are_inert() {
         if let Some(summary_child) = child_summary.as_ref() {
           merge_summary(&mut summary, summary_child);
         }
@@ -2444,16 +2431,8 @@ pub(crate) fn clone_dom_with_deadline_and_top_layer_hint(
 }
 
 fn parse_shadow_root_definition(template: &DomNode) -> Option<(ShadowRootMode, bool)> {
-  if !template
-    .tag_name()
-    .map(|t| t.eq_ignore_ascii_case("template"))
-    .unwrap_or(false)
-  {
-    return None;
-  }
-
   // Declarative shadow DOM only applies to HTML templates, not e.g. SVG <template>.
-  if !matches!(template.namespace(), Some(ns) if ns.is_empty() || ns == HTML_NAMESPACE) {
+  if !template.is_html_template_element() {
     return None;
   }
 
@@ -2473,19 +2452,6 @@ fn parse_shadow_root_definition(template: &DomNode) -> Option<(ShadowRootMode, b
     .is_some();
 
   Some((mode, delegates_focus))
-}
-
-/// Returns true if `node` is a `<template>` element whose contents should be treated as inert.
-///
-/// `parse_html` promotes the first declarative shadow DOM template for each host into a
-/// `DomNodeType::ShadowRoot`, leaving any remaining `<template>` nodes (including unused
-/// `<template shadowroot=...>` siblings) in the light DOM. Those remaining templates behave as
-/// inert template contents for all post-parse traversals (CSS extraction, prefetch discovery, etc).
-pub(crate) fn is_inert_html_template(node: &DomNode) -> bool {
-  matches!(
-    node.tag_name(),
-    Some(tag) if tag.eq_ignore_ascii_case("template")
-  )
 }
 
 fn attach_shadow_roots(node: &mut DomNode, deadline_counter: &mut usize) -> Result<()> {
@@ -2527,9 +2493,7 @@ fn attach_shadow_roots(node: &mut DomNode, deadline_counter: &mut usize) -> Resu
         let child = unsafe { &*child_ptr };
         // Template contents are inert; only the first declarative shadow DOM template is walked so
         // nested declarative shadow roots inside it can be promoted.
-        if matches!(child.tag_name(), Some(tag) if tag.eq_ignore_ascii_case("template"))
-          && first_declarative_shadow_template != Some(idx)
-        {
+        if child.is_template_element() && first_declarative_shadow_template != Some(idx) {
           continue;
         }
 
@@ -2578,11 +2542,6 @@ fn attach_shadow_roots(node: &mut DomNode, deadline_counter: &mut usize) -> Resu
   Ok(())
 }
 
-fn is_slot_assignment_inert_template(node: &DomNode) -> bool {
-  matches!(node.tag_name(), Some(tag) if tag.eq_ignore_ascii_case("template"))
-    && matches!(node.namespace(), Some(ns) if ns.is_empty() || ns == HTML_NAMESPACE)
-}
-
 fn collect_slot_names<'a>(
   node: &'a DomNode,
   out: &mut HashSet<&'a str>,
@@ -2599,23 +2558,18 @@ fn collect_slot_names<'a>(
       RenderStage::Cascade,
     )
     .map_err(Error::Render)?;
-    if is_slot_assignment_inert_template(current) {
-      continue;
-    }
-    if matches!(current.node_type, DomNodeType::Slot { .. }) {
-      out.insert(current.get_attribute_ref("name").unwrap_or(""));
-    }
-
     if matches!(current.node_type, DomNodeType::ShadowRoot { .. }) && !ptr::eq(current, root_ptr) {
       // Slot assignment is scoped to a single shadow root; do not treat slots inside nested shadow
       // roots as "available" when assigning this host's light DOM children.
       continue;
     }
 
-    for child in current.children.iter().rev() {
-      if matches!(child.node_type, DomNodeType::ShadowRoot { .. })
-        || is_slot_assignment_inert_template(child)
-      {
+    if matches!(current.node_type, DomNodeType::Slot { .. }) {
+      out.insert(current.get_attribute_ref("name").unwrap_or(""));
+    }
+
+    for child in current.traversal_children().iter().rev() {
+      if matches!(child.node_type, DomNodeType::ShadowRoot { .. }) {
         continue;
       }
       stack.push(child);
@@ -2678,7 +2632,7 @@ fn fill_slot_assignments(
       RenderStage::Cascade,
     )
     .map_err(Error::Render)?;
-    let mut traverse_children = !is_slot_assignment_inert_template(current);
+    let mut traverse_children = true;
 
     if matches!(current.node_type, DomNodeType::ShadowRoot { .. }) && !ptr::eq(current, root_ptr) {
       // Shadow tree boundaries block assignment of this host's light DOM into nested shadow roots.
@@ -2733,10 +2687,8 @@ fn fill_slot_assignments(
     }
 
     if traverse_children {
-      for child in current.children.iter().rev() {
-        if matches!(child.node_type, DomNodeType::ShadowRoot { .. })
-          || is_slot_assignment_inert_template(child)
-        {
+      for child in current.traversal_children().iter().rev() {
+        if matches!(child.node_type, DomNodeType::ShadowRoot { .. }) {
           continue;
         }
         stack.push(child);
@@ -3772,6 +3724,25 @@ impl DomNode {
       DomNodeType::Slot { namespace, .. } => Some(namespace),
       _ => None,
     }
+  }
+
+  pub fn is_html_template_element(&self) -> bool {
+    self
+      .tag_name()
+      .map(|tag| tag.eq_ignore_ascii_case("template"))
+      .unwrap_or(false)
+      && matches!(self.namespace(), Some(ns) if ns.is_empty() || ns == HTML_NAMESPACE)
+  }
+
+  /// Returns true if this node is a `<template>` element whose contents should be treated as inert.
+  ///
+  /// `parse_html` promotes the first declarative shadow DOM template for each host into a
+  /// `DomNodeType::ShadowRoot`, leaving any remaining `<template>` nodes (including unused
+  /// `<template shadowroot=...>` siblings) in the light DOM. Those remaining templates behave as
+  /// inert template contents for all post-parse traversals (CSS extraction, prefetch discovery,
+  /// selector matching, etc).
+  pub fn template_contents_are_inert(&self) -> bool {
+    matches!(self.tag_name(), Some(tag) if tag.eq_ignore_ascii_case("template"))
   }
 
   pub fn document_quirks_mode(&self) -> QuirksMode {
@@ -6258,10 +6229,9 @@ fn match_relative_selector_descendants<'a>(
 ) -> bool {
   // HTML template contents are not part of the DOM tree for selector matching; do not traverse into
   // them. The <template> element itself is still matchable via its parent.
-  if node_is_html_template_element(anchor) {
+  if anchor.template_contents_are_inert() {
     return false;
   }
-
   let ancestor_hashes = selector.ancestor_hashes_for_mode(context.quirks_mode());
   ancestors.with_pushed(anchor, |ancestors| {
     if use_ancestor_bloom {
@@ -6340,6 +6310,9 @@ fn match_relative_selector_siblings<'a>(
     Some(p) => p,
     None => return false,
   };
+  if parent.template_contents_are_inert() {
+    return false;
+  }
 
   let mut seen_anchor = false;
   for sibling in parent
@@ -6410,7 +6383,7 @@ fn match_relative_selector_subtree<'a>(
 ) -> bool {
   debug_assert!(selector.match_hint.is_subtree());
   // HTML template contents are inert and should not be traversed for selector matching.
-  if node_is_html_template_element(node) {
+  if node.template_contents_are_inert() {
     return false;
   }
 
@@ -6532,7 +6505,7 @@ fn match_relative_selector_subtree<'a>(
     }
 
     // Do not recurse into HTML template contents.
-    if node_is_html_template_element(child) {
+    if child.template_contents_are_inert() {
       continue;
     }
 
@@ -6894,62 +6867,6 @@ mod tests {
   }
 
   #[test]
-  fn inert_html_template_helper_treats_all_templates_as_inert() {
-    let missing_attr = DomNode {
-      node_type: DomNodeType::Element {
-        tag_name: "template".to_string(),
-        namespace: String::new(),
-        attributes: vec![],
-      },
-      children: vec![],
-    };
-    assert!(is_inert_html_template(&missing_attr));
-
-    let invalid_attr = DomNode {
-      node_type: DomNodeType::Element {
-        tag_name: "template".to_string(),
-        namespace: String::new(),
-        attributes: vec![("shadowroot".to_string(), "invalid".to_string())],
-      },
-      children: vec![],
-    };
-    assert!(is_inert_html_template(&invalid_attr));
-
-    let open_attr = DomNode {
-      node_type: DomNodeType::Element {
-        tag_name: "template".to_string(),
-        namespace: String::new(),
-        attributes: vec![("shadowroot".to_string(), "open".to_string())],
-      },
-      children: vec![],
-    };
-    assert!(is_inert_html_template(&open_attr));
-
-    let closed_attr = DomNode {
-      node_type: DomNodeType::Element {
-        tag_name: "template".to_string(),
-        namespace: HTML_NAMESPACE.to_string(),
-        attributes: vec![("shadowrootmode".to_string(), "closed".to_string())],
-      },
-      children: vec![],
-    };
-    assert!(is_inert_html_template(&closed_attr));
-  }
-
-  #[test]
-  fn inert_html_template_helper_treats_non_html_template_as_inert() {
-    let svg_template = DomNode {
-      node_type: DomNodeType::Element {
-        tag_name: "template".to_string(),
-        namespace: SVG_NAMESPACE.to_string(),
-        attributes: vec![("shadowroot".to_string(), "open".to_string())],
-      },
-      children: vec![],
-    };
-    assert!(is_inert_html_template(&svg_template));
-  }
-
-  #[test]
   fn slot_assignment_ignores_template_contents() {
     let html = "<div id='host'><template shadowroot='open'><template><slot id='tmpl' name='a'></slot></template><slot id='real' name='a'></slot></template><span id='light' slot='a'></span></div>";
     let dom = parse_html(html).expect("parse html");
@@ -7009,6 +6926,46 @@ mod tests {
     let targets = exports.get("x").expect("part targets");
     assert!(targets.contains(&real_id));
     assert!(!targets.contains(&template_id));
+  }
+
+  #[test]
+  fn has_relative_selector_does_not_match_inside_template_contents() {
+    let dom = element("div", vec![element("template", vec![element("span", vec![])])]);
+
+    let mut input = ParserInput::new("span");
+    let mut parser = Parser::new(&mut input);
+    let list =
+      SelectorList::parse(&PseudoClassParser, &mut parser, ParseRelative::ForHas).expect("parse");
+    let selectors = build_relative_selectors(list);
+
+    let mut caches = SelectorCaches::default();
+    caches.set_epoch(next_selector_cache_epoch());
+    let mut context = MatchingContext::new(
+      MatchingMode::Normal,
+      None,
+      &mut caches,
+      QuirksMode::NoQuirks,
+      NeedsSelectorFlags::No,
+      MatchingForInvalidation::No,
+    );
+    context.extra_data = ShadowMatchData::for_document();
+
+    let mut ancestors = RelativeSelectorAncestorStack::new(&[]);
+    let mut bloom_filter = BloomFilter::new();
+    let mut deadline_counter = 0usize;
+
+    assert!(
+      !match_relative_selector(
+        &selectors[0],
+        &dom,
+        &mut ancestors,
+        &mut bloom_filter,
+        false,
+        &mut context,
+        &mut deadline_counter,
+      ),
+      ":has should not traverse into inert template contents"
+    );
   }
 
   fn matches(node: &DomNode, ancestors: &[&DomNode], pseudo: &PseudoClass) -> bool {

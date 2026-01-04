@@ -404,10 +404,6 @@ mod disk_cache_main {
     }
   }
 
-  fn is_inert_template(node: &DomNode) -> bool {
-    node.is_template_element()
-  }
-
   fn looks_like_css_url(url: &str) -> bool {
     url::Url::parse(url)
       .ok()
@@ -564,7 +560,7 @@ mod disk_cache_main {
         }
       }
 
-      if is_inert_template(node) {
+      if node.template_contents_are_inert() {
         continue;
       }
       for child in node.children.iter().rev() {
@@ -723,7 +719,7 @@ mod disk_cache_main {
         }
       }
 
-      if is_inert_template(node) {
+      if node.template_contents_are_inert() {
         continue;
       }
       for child in node.children.iter().rev() {
@@ -811,7 +807,7 @@ mod disk_cache_main {
         }
       }
 
-      if is_inert_template(node) {
+      if node.template_contents_are_inert() {
         continue;
       }
       for child in node.children.iter().rev() {
@@ -919,7 +915,7 @@ mod disk_cache_main {
         }
       }
 
-      if is_inert_template(node) {
+      if node.template_contents_are_inert() {
         continue;
       }
       for child in node.children.iter().rev() {

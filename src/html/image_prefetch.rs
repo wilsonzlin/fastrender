@@ -110,10 +110,6 @@ fn normalize_mime_type(value: &str) -> Option<String> {
   }
 }
 
-fn is_inert_template(node: &DomNode) -> bool {
-  node.is_template_element()
-}
-
 fn resolve_prefetch_url(ctx: ImageSelectionContext<'_>, raw: &str) -> Option<String> {
   let resolved = resolve_href_with_base(ctx.base_url, raw)?;
   if is_data_url(&resolved) {
@@ -377,7 +373,7 @@ pub fn discover_image_prefetch_urls(
       return false;
     }
 
-    if is_inert_template(node) {
+    if node.template_contents_are_inert() {
       return true;
     }
 
@@ -952,9 +948,41 @@ mod tests {
 
     assert_eq!(out.image_elements, 1);
     assert!(!out.limited);
+    assert_eq!(out.urls, vec!["https://example.com/good.jpg".to_string()]);
+  }
+
+  #[test]
+  fn ignores_images_inside_unpromoted_shadow_templates() {
+    let html = r#"
+      <div id="host">
+        <template shadowroot="open"><span></span></template>
+        <template shadowroot="open">
+          <picture>
+            <source srcset="bad.jpg 1x, bad@2x.jpg 2x">
+            <img src="bad-fallback.jpg">
+          </picture>
+        </template>
+      </div>
+      <img src="outside.jpg">
+    "#;
+    let dom = parse_html(html).unwrap();
+
+    let media_ctx = media_ctx_for((800.0, 600.0), 1.0);
+    let ctx = ctx_for((800.0, 600.0), 1.0, &media_ctx, "https://example.com/");
+    let out = discover_image_prefetch_urls(
+      &dom,
+      ctx,
+      ImagePrefetchLimits {
+        max_image_elements: 10,
+        max_urls_per_element: 2,
+      },
+    );
+
+    assert_eq!(out.image_elements, 1);
+    assert!(!out.limited);
     assert_eq!(
       out.urls,
-      vec!["https://example.com/good.jpg".to_string()]
+      vec!["https://example.com/outside.jpg".to_string()]
     );
   }
 }

@@ -314,7 +314,7 @@ fn collect_box_generation_prepass<'a>(
     let mut children_css_allowed = css_allowed;
     if css_allowed && css.enabled {
       if let Some(tag) = node.node.tag_name() {
-        if tag.eq_ignore_ascii_case("template") {
+        if node.node.is_template_element() {
           children_css_allowed = false;
         } else if tag.eq_ignore_ascii_case("style") {
           for child in node.children.iter() {

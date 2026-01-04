@@ -25,7 +25,9 @@ pub fn find_base_href(dom: &DomNode) -> Option<String> {
       return None;
     }
     if let Some(tag) = node.tag_name() {
-      if tag.eq_ignore_ascii_case("head") && node.namespace() == Some(HTML_NAMESPACE) {
+      if tag.eq_ignore_ascii_case("head")
+        && matches!(node.namespace(), Some(ns) if ns.is_empty() || ns == HTML_NAMESPACE)
+      {
         return Some(node);
       }
     }
@@ -45,7 +47,9 @@ pub fn find_base_href(dom: &DomNode) -> Option<String> {
       return None;
     }
     if let Some(tag) = node.tag_name() {
-      if tag.eq_ignore_ascii_case("base") && node.namespace() == Some(HTML_NAMESPACE) {
+      if tag.eq_ignore_ascii_case("base")
+        && matches!(node.namespace(), Some(ns) if ns.is_empty() || ns == HTML_NAMESPACE)
+      {
         if let Some(href) = node.get_attribute_ref("href") {
           let trimmed = href.trim();
           if !trimmed.is_empty() && !trimmed.starts_with('#') {
