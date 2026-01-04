@@ -230,6 +230,7 @@ fn test_all_fixture_files_exist() {
     "text_font_variant_emoji",
     "text_font_variant_emoji_webfont",
     "text_overflow_vertical",
+    "text_overflow_wrap_word_break_priority",
     "text_letter_spacing_vertical",
     "text_font_palette_overrides_display_list",
     "text_vertical_orientation_mixed",
@@ -506,6 +507,12 @@ fn test_fixture_text_overflow_vertical() {
 }
 
 #[test]
+fn test_fixture_text_overflow_wrap_word_break_priority() {
+  test_fixture("text_overflow_wrap_word_break_priority")
+    .expect("text_overflow_wrap_word_break_priority fixture should render");
+}
+
+#[test]
 fn test_fixture_text_letter_spacing_vertical() {
   test_fixture("text_letter_spacing_vertical")
     .expect("text_letter_spacing_vertical fixture should render");
@@ -621,6 +628,7 @@ pub fn list_fixtures() -> Vec<&'static str> {
     "text_font_variant_emoji",
     "text_font_variant_emoji_webfont",
     "text_overflow_vertical",
+    "text_overflow_wrap_word_break_priority",
     "text_letter_spacing_vertical",
     "text_font_palette_overrides_display_list",
     "text_vertical_orientation_mixed",

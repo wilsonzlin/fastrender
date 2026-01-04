@@ -77,6 +77,21 @@ pub enum BreakType {
   Allowed,
 }
 
+/// Priority/kind of a break opportunity.
+///
+/// CSS can introduce additional "emergency" break opportunities (e.g. via
+/// `overflow-wrap` or `word-break`) that should only be used when no normal
+/// break opportunity fits. These are kept separate from the Unicode line
+/// breaking result so layout can prefer normal opportunities.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum BreakOpportunityKind {
+  /// Normal line break opportunities from UAX#14, forced breaks, and hyphenation.
+  Normal,
+  /// Emergency breaks that may be used to avoid overflow, but are lower priority
+  /// than `Normal` opportunities during line layout.
+  Emergency,
+}
+
 /// A break opportunity in text
 ///
 /// Represents a position where a line break is allowed or required.
@@ -102,6 +117,9 @@ pub struct BreakOpportunity {
 
   /// Type of break at this position.
   pub break_type: BreakType,
+
+  /// Kind/priority of this break.
+  pub kind: BreakOpportunityKind,
 
   /// Whether a hyphen glyph should be inserted when breaking here.
   ///
@@ -134,11 +152,44 @@ impl BreakOpportunity {
   /// Create a break opportunity and control hyphen insertion.
   #[inline]
   pub fn with_hyphen(byte_offset: usize, break_type: BreakType, adds_hyphen: bool) -> Self {
-    Self {
+    Self::with_hyphen_and_kind(
       byte_offset,
       break_type,
       adds_hyphen,
+      BreakOpportunityKind::Normal,
+    )
+  }
+
+  /// Create a break opportunity with explicit kind and hyphen insertion.
+  #[inline]
+  pub fn with_hyphen_and_kind(
+    byte_offset: usize,
+    break_type: BreakType,
+    adds_hyphen: bool,
+    kind: BreakOpportunityKind,
+  ) -> Self {
+    Self {
+      byte_offset,
+      break_type,
+      kind: if break_type == BreakType::Mandatory {
+        BreakOpportunityKind::Normal
+      } else {
+        kind
+      },
+      adds_hyphen,
     }
+  }
+
+  /// Create an allowed break opportunity with explicit kind.
+  #[inline]
+  pub fn allowed_with_kind(byte_offset: usize, kind: BreakOpportunityKind) -> Self {
+    Self::with_hyphen_and_kind(byte_offset, BreakType::Allowed, false, kind)
+  }
+
+  /// Create an emergency allowed break opportunity.
+  #[inline]
+  pub fn emergency(byte_offset: usize) -> Self {
+    Self::allowed_with_kind(byte_offset, BreakOpportunityKind::Emergency)
   }
 
   /// Create a mandatory break opportunity.
@@ -253,11 +304,12 @@ pub fn find_break_opportunities(text: &str) -> Vec<BreakOpportunity> {
       UnicodeBreakOpportunity::Allowed => BreakType::Allowed,
     };
 
-    opportunities.push(BreakOpportunity {
+    opportunities.push(BreakOpportunity::with_hyphen_and_kind(
       byte_offset,
       break_type,
-      adds_hyphen: false,
-    });
+      false,
+      BreakOpportunityKind::Normal,
+    ));
   }
 
   filter_breaks_inside_emoji_sequences(text, opportunities)

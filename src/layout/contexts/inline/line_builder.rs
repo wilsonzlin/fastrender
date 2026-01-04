@@ -530,8 +530,19 @@ impl TextItem {
         if a.byte_offset != b.byte_offset {
           return false;
         }
-        if let BreakType::Mandatory = a.break_type {
-          *b = *a;
+        let mandatory = matches!(a.break_type, BreakType::Mandatory)
+          || matches!(b.break_type, BreakType::Mandatory);
+        if mandatory {
+          b.break_type = BreakType::Mandatory;
+          b.kind = crate::text::line_break::BreakOpportunityKind::Normal;
+        } else if matches!(
+          a.kind,
+          crate::text::line_break::BreakOpportunityKind::Normal
+        ) || matches!(
+          b.kind,
+          crate::text::line_break::BreakOpportunityKind::Normal
+        ) {
+          b.kind = crate::text::line_break::BreakOpportunityKind::Normal;
         }
         b.adds_hyphen |= a.adds_hyphen;
         true
@@ -551,9 +562,19 @@ impl TextItem {
           } else if a.byte_offset > b.byte_offset {
             merged.push(additional_iter.next().unwrap());
           } else {
-            // Same byte offset: keep the existing break, discard the cluster-added one.
-            merged.push(base_iter.next().unwrap());
-            additional_iter.next();
+            // Same byte offset: merge so normal/mandatory/hyphen metadata wins.
+            let mut existing = base_iter.next().unwrap();
+            let added = additional_iter.next().unwrap();
+            if matches!(added.break_type, BreakType::Mandatory)
+              || matches!(existing.break_type, BreakType::Mandatory)
+            {
+              existing.break_type = BreakType::Mandatory;
+              existing.kind = crate::text::line_break::BreakOpportunityKind::Normal;
+            } else {
+              existing.kind = crate::text::line_break::BreakOpportunityKind::Normal;
+            }
+            existing.adds_hyphen |= added.adds_hyphen;
+            merged.push(existing);
           }
         }
         (Some(_), None) => merged.push(base_iter.next().unwrap()),
@@ -651,15 +672,21 @@ impl TextItem {
     let before_text = self.text.get(..split_offset)?;
     let after_text = self.text.get(split_offset..)?;
 
-    let (mut before_runs, after_runs) =
-      self
-        .split_runs_preserving_shaping(split_offset)
-        .or_else(|| {
-          let before_runs = reshape_cache.shape(self, 0..split_offset, shaper, font_context)?;
-          let after_runs =
-            reshape_cache.shape(self, split_offset..text_len, shaper, font_context)?;
-          Some((before_runs, after_runs))
-        })?;
+    // Forced breaks (e.g. newlines removed during white-space normalization) must not allow shaping
+    // effects such as kerning to carry across the boundary. In those cases, always reshape each side
+    // rather than slicing the existing glyph stream.
+    let is_forced_break = self
+      .forced_break_offsets
+      .binary_search(&split_offset)
+      .is_ok();
+    let (mut before_runs, after_runs) = (!is_forced_break)
+      .then(|| self.split_runs_preserving_shaping(split_offset))
+      .flatten()
+      .or_else(|| {
+        let before_runs = reshape_cache.shape(self, 0..split_offset, shaper, font_context)?;
+        let after_runs = reshape_cache.shape(self, split_offset..text_len, shaper, font_context)?;
+        Some((before_runs, after_runs))
+      })?;
 
     let before_text_owned: Option<String> = if insert_hyphen {
       let mut hyphen_buf = [0u8; 3];
@@ -739,7 +766,12 @@ impl TextItem {
         .iter()
         .filter(|b| b.byte_offset > split_offset)
         .map(|b| {
-          BreakOpportunity::with_hyphen(b.byte_offset - split_offset, b.break_type, b.adds_hyphen)
+          BreakOpportunity::with_hyphen_and_kind(
+            b.byte_offset - split_offset,
+            b.break_type,
+            b.adds_hyphen,
+            b.kind,
+          )
         })
         .collect(),
       self
@@ -799,7 +831,12 @@ impl TextItem {
           .iter()
           .filter(|b| b.byte_offset > split_offset)
           .map(|b| {
-            BreakOpportunity::with_hyphen(b.byte_offset - split_offset, b.break_type, b.adds_hyphen)
+            BreakOpportunity::with_hyphen_and_kind(
+              b.byte_offset - split_offset,
+              b.break_type,
+              b.adds_hyphen,
+              b.kind,
+            )
           })
           .collect(),
         self
@@ -981,9 +1018,22 @@ impl TextItem {
       }
     }
 
-    let mut best_break = self
-      .offset_for_width(max_width)
-      .and_then(|offset| self.allowed_break_at_or_before(offset));
+    let fitting_offset = self.offset_for_width(max_width);
+    let mut best_break = fitting_offset
+      .and_then(|offset| {
+        self.allowed_break_at_or_before_with_kind(
+          offset,
+          crate::text::line_break::BreakOpportunityKind::Normal,
+        )
+      })
+      .or_else(|| {
+        fitting_offset.and_then(|offset| {
+          self.allowed_break_at_or_before_with_kind(
+            offset,
+            crate::text::line_break::BreakOpportunityKind::Emergency,
+          )
+        })
+      });
     if best_break.is_some() || !allows_soft_wrap(self.style.as_ref()) {
       return best_break;
     }
@@ -992,7 +1042,10 @@ impl TextItem {
       self.style.word_break,
       WordBreak::BreakWord | WordBreak::Anywhere
     );
-    let can_overflow_break_by_wrap = self.style.overflow_wrap == OverflowWrap::BreakWord;
+    let can_overflow_break_by_wrap = matches!(
+      self.style.overflow_wrap,
+      OverflowWrap::BreakWord | OverflowWrap::Anywhere
+    );
 
     if (can_overflow_break_word || can_overflow_break_by_wrap) && best_break.is_none() {
       if let Some(mut offset) = self.offset_for_width(max_width) {
@@ -1004,7 +1057,7 @@ impl TextItem {
             Self::previous_char_boundary_in_text(&self.text, self.text.len().saturating_sub(1));
         }
         if offset > 0 {
-          best_break = Some(BreakOpportunity::allowed(offset));
+          best_break = Some(BreakOpportunity::emergency(offset));
         }
       }
     }
@@ -1027,7 +1080,11 @@ impl TextItem {
     self.cluster_advances.get(idx - 1).map(|b| b.byte_offset)
   }
 
-  fn allowed_break_at_or_before(&self, byte_offset: usize) -> Option<BreakOpportunity> {
+  fn allowed_break_at_or_before_with_kind(
+    &self,
+    byte_offset: usize,
+    kind: crate::text::line_break::BreakOpportunityKind,
+  ) -> Option<BreakOpportunity> {
     if self.break_opportunities.is_empty() {
       return None;
     }
@@ -1038,7 +1095,7 @@ impl TextItem {
     while idx > 0 {
       idx -= 1;
       let brk = self.break_opportunities[idx];
-      if matches!(brk.break_type, BreakType::Allowed) {
+      if matches!(brk.break_type, BreakType::Allowed) && brk.kind == kind {
         return Some(brk);
       }
     }
@@ -1251,18 +1308,22 @@ impl TextItem {
       if let Some(offset) = aligned_offset {
         if let Some(last) = aligned.last_mut() {
           if last.byte_offset == offset {
-            if brk.break_type == BreakType::Mandatory {
+            if brk.break_type == BreakType::Mandatory || last.break_type == BreakType::Mandatory {
               last.break_type = BreakType::Mandatory;
+              last.kind = crate::text::line_break::BreakOpportunityKind::Normal;
+            } else if brk.kind == crate::text::line_break::BreakOpportunityKind::Normal {
+              last.kind = crate::text::line_break::BreakOpportunityKind::Normal;
             }
             last.adds_hyphen |= brk.adds_hyphen;
             continue;
           }
         }
 
-        aligned.push(BreakOpportunity::with_hyphen(
+        aligned.push(BreakOpportunity::with_hyphen_and_kind(
           offset,
           brk.break_type,
           brk.adds_hyphen,
+          brk.kind,
         ));
       }
     }
@@ -2293,13 +2354,16 @@ impl<'a> LineBuilder<'a> {
         break_opportunity = text_item.break_opportunities.first().copied();
         if break_opportunity.is_none()
           && allows_soft_wrap(text_item.style.as_ref())
-          && matches!(
+          && (matches!(
             text_item.style.word_break,
             WordBreak::BreakWord | WordBreak::Anywhere
-          )
+          ) || matches!(
+            text_item.style.overflow_wrap,
+            OverflowWrap::BreakWord | OverflowWrap::Anywhere
+          ))
         {
           if let Some((idx, _)) = text_item.text.char_indices().nth(1) {
-            break_opportunity = Some(BreakOpportunity::allowed(idx));
+            break_opportunity = Some(BreakOpportunity::emergency(idx));
           }
         }
       }
@@ -3112,7 +3176,12 @@ fn slice_text_item(
       .iter()
       .filter(|b| b.byte_offset >= range.start && b.byte_offset <= range.end)
       .map(|b| {
-        BreakOpportunity::with_hyphen(b.byte_offset - range.start, b.break_type, b.adds_hyphen)
+        BreakOpportunity::with_hyphen_and_kind(
+          b.byte_offset - range.start,
+          b.break_type,
+          b.adds_hyphen,
+          b.kind,
+        )
       })
       .collect();
     let first_mandatory_break = TextItem::first_mandatory_break(&breaks);
@@ -3205,7 +3274,12 @@ fn slice_text_item(
     .iter()
     .filter(|b| b.byte_offset >= range.start && b.byte_offset <= range.end)
     .map(|b| {
-      BreakOpportunity::with_hyphen(b.byte_offset - range.start, b.break_type, b.adds_hyphen)
+      BreakOpportunity::with_hyphen_and_kind(
+        b.byte_offset - range.start,
+        b.break_type,
+        b.adds_hyphen,
+        b.kind,
+      )
     })
     .collect();
   let forced = item
@@ -3482,8 +3556,10 @@ mod tests {
   }
 
   fn old_find_break_point(item: &TextItem, max_width: f32) -> Option<BreakOpportunity> {
+    use crate::text::line_break::BreakOpportunityKind;
     let mut mandatory_break: Option<BreakOpportunity> = None;
-    let mut allowed_break: Option<BreakOpportunity> = None;
+    let mut normal_allowed_break: Option<BreakOpportunity> = None;
+    let mut emergency_allowed_break: Option<BreakOpportunity> = None;
 
     for brk in &item.break_opportunities {
       let width_at_break = item.advance_at_offset(brk.byte_offset);
@@ -3494,14 +3570,19 @@ mod tests {
               mandatory_break = Some(*brk);
             }
           }
-          BreakType::Allowed => allowed_break = Some(*brk),
+          BreakType::Allowed => match brk.kind {
+            BreakOpportunityKind::Normal => normal_allowed_break = Some(*brk),
+            BreakOpportunityKind::Emergency => emergency_allowed_break = Some(*brk),
+          },
         }
       } else {
         break;
       }
     }
 
-    let mut best_break = mandatory_break.or(allowed_break);
+    let mut best_break = mandatory_break
+      .or(normal_allowed_break)
+      .or(emergency_allowed_break);
     if best_break.is_some() || !allows_soft_wrap(item.style.as_ref()) {
       return best_break;
     }
@@ -3510,13 +3591,16 @@ mod tests {
       item.style.word_break,
       WordBreak::BreakWord | WordBreak::Anywhere
     );
-    let can_overflow_break_by_wrap = item.style.overflow_wrap == OverflowWrap::BreakWord;
+    let can_overflow_break_by_wrap = matches!(
+      item.style.overflow_wrap,
+      OverflowWrap::BreakWord | OverflowWrap::Anywhere
+    );
 
     if can_overflow_break_word || can_overflow_break_by_wrap {
       for (idx, _) in item.text.char_indices().skip(1) {
         let width_at_break = item.advance_at_offset(idx);
         if width_at_break <= max_width {
-          best_break = Some(BreakOpportunity::allowed(idx));
+          best_break = Some(BreakOpportunity::emergency(idx));
         } else {
           break;
         }
@@ -4014,6 +4098,12 @@ mod tests {
     overflow_wrap.first_mandatory_break = None;
     cases.push(overflow_wrap);
 
+    let mut priority = make_text_item("abcd", 4.0);
+    priority.break_opportunities =
+      vec![BreakOpportunity::allowed(2), BreakOpportunity::emergency(3)];
+    priority.first_mandatory_break = TextItem::first_mandatory_break(&priority.break_opportunities);
+    cases.push(priority);
+
     for (idx, item) in cases.into_iter().enumerate() {
       for width in &widths {
         let expected = old_find_break_point(&item, *width);
@@ -4025,6 +4115,24 @@ mod tests {
         );
       }
     }
+  }
+
+  #[test]
+  fn find_break_point_prefers_normal_breaks_over_emergency() {
+    use crate::text::line_break::BreakOpportunityKind;
+
+    let mut item = make_text_item("hello world", 11.0);
+    item.break_opportunities = vec![
+      BreakOpportunity::allowed(6),   // after the space
+      BreakOpportunity::emergency(7), // after "w"
+      BreakOpportunity::allowed(11),  // end of text
+    ];
+    item.first_mandatory_break = None;
+
+    // Enough room for "hello w", but a normal break at the space should win.
+    let brk = item.find_break_point(7.0).expect("break point");
+    assert_eq!(brk.byte_offset, 6);
+    assert_eq!(brk.kind, BreakOpportunityKind::Normal);
   }
 
   #[test]

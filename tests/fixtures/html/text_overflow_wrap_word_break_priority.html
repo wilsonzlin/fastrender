@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <title>Text - overflow-wrap/word-break priority</title>
+    <style>
+      body {
+        margin: 0;
+        padding: 16px;
+        font-family: sans-serif;
+        font-size: 14px;
+        line-height: 1.2;
+        background: #fff;
+      }
+
+      h1 {
+        font-size: 16px;
+        margin: 0 0 12px 0;
+      }
+
+      table.matrix {
+        border-collapse: collapse;
+        width: 100%;
+      }
+
+      table.matrix th,
+      table.matrix td {
+        border: 1px solid #cfcfcf;
+        vertical-align: top;
+        padding: 6px;
+      }
+
+      table.matrix thead th {
+        background: #f3f3f3;
+        font-weight: 600;
+      }
+
+      table.matrix tbody th {
+        background: #fafafa;
+        font-weight: 600;
+        white-space: nowrap;
+      }
+
+      .cell {
+        font-family: "DejaVu Sans Mono", monospace;
+        font-size: 12px;
+        line-height: 1.1;
+        color: #111;
+      }
+
+      .sample {
+        border: 1px solid #e0e0e0;
+        background: #fcfcfc;
+        padding: 2px 3px;
+        margin: 3px 0;
+        overflow: hidden;
+      }
+
+      /* Width chosen so "hello w" fits but "hello wo" does not. */
+      .sample.narrow {
+        width: 7ch;
+      }
+
+      /* Width chosen so "https://example.com/" fits and part of the next segment could fit. */
+      .sample.url {
+        width: 24ch;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>overflow-wrap/word-break: prefer normal breaks, use emergency breaks only when needed</h1>
+
+    <table class="matrix">
+      <thead>
+        <tr>
+          <th>word-break \\ overflow-wrap</th>
+          <th>normal</th>
+          <th>break-word</th>
+          <th>anywhere</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <th>normal</th>
+          <td class="cell" style="word-break: normal; overflow-wrap: normal">
+            <div class="sample narrow">hello world</div>
+            <div class="sample url">https://example.com/averyverylongsegment</div>
+            <div class="sample narrow">supercalifragilisticexpialidocious</div>
+            <div class="sample narrow">这是一些中文文本用于换行测试</div>
+          </td>
+          <td class="cell" style="word-break: normal; overflow-wrap: break-word">
+            <div class="sample narrow">hello world</div>
+            <div class="sample url">https://example.com/averyverylongsegment</div>
+            <div class="sample narrow">supercalifragilisticexpialidocious</div>
+            <div class="sample narrow">这是一些中文文本用于换行测试</div>
+          </td>
+          <td class="cell" style="word-break: normal; overflow-wrap: anywhere">
+            <div class="sample narrow">hello world</div>
+            <div class="sample url">https://example.com/averyverylongsegment</div>
+            <div class="sample narrow">supercalifragilisticexpialidocious</div>
+            <div class="sample narrow">这是一些中文文本用于换行测试</div>
+          </td>
+        </tr>
+
+        <tr>
+          <th>break-all</th>
+          <td class="cell" style="word-break: break-all; overflow-wrap: normal">
+            <div class="sample narrow">hello world</div>
+            <div class="sample url">https://example.com/averyverylongsegment</div>
+            <div class="sample narrow">supercalifragilisticexpialidocious</div>
+            <div class="sample narrow">这是一些中文文本用于换行测试</div>
+          </td>
+          <td class="cell" style="word-break: break-all; overflow-wrap: break-word">
+            <div class="sample narrow">hello world</div>
+            <div class="sample url">https://example.com/averyverylongsegment</div>
+            <div class="sample narrow">supercalifragilisticexpialidocious</div>
+            <div class="sample narrow">这是一些中文文本用于换行测试</div>
+          </td>
+          <td class="cell" style="word-break: break-all; overflow-wrap: anywhere">
+            <div class="sample narrow">hello world</div>
+            <div class="sample url">https://example.com/averyverylongsegment</div>
+            <div class="sample narrow">supercalifragilisticexpialidocious</div>
+            <div class="sample narrow">这是一些中文文本用于换行测试</div>
+          </td>
+        </tr>
+
+        <tr>
+          <th>break-word</th>
+          <td class="cell" style="word-break: break-word; overflow-wrap: normal">
+            <div class="sample narrow">hello world</div>
+            <div class="sample url">https://example.com/averyverylongsegment</div>
+            <div class="sample narrow">supercalifragilisticexpialidocious</div>
+            <div class="sample narrow">这是一些中文文本用于换行测试</div>
+          </td>
+          <td class="cell" style="word-break: break-word; overflow-wrap: break-word">
+            <div class="sample narrow">hello world</div>
+            <div class="sample url">https://example.com/averyverylongsegment</div>
+            <div class="sample narrow">supercalifragilisticexpialidocious</div>
+            <div class="sample narrow">这是一些中文文本用于换行测试</div>
+          </td>
+          <td class="cell" style="word-break: break-word; overflow-wrap: anywhere">
+            <div class="sample narrow">hello world</div>
+            <div class="sample url">https://example.com/averyverylongsegment</div>
+            <div class="sample narrow">supercalifragilisticexpialidocious</div>
+            <div class="sample narrow">这是一些中文文本用于换行测试</div>
+          </td>
+        </tr>
+
+        <tr>
+          <th>keep-all</th>
+          <td class="cell" style="word-break: keep-all; overflow-wrap: normal">
+            <div class="sample narrow">hello world</div>
+            <div class="sample url">https://example.com/averyverylongsegment</div>
+            <div class="sample narrow">supercalifragilisticexpialidocious</div>
+            <div class="sample narrow">这是一些中文文本用于换行测试</div>
+          </td>
+          <td class="cell" style="word-break: keep-all; overflow-wrap: break-word">
+            <div class="sample narrow">hello world</div>
+            <div class="sample url">https://example.com/averyverylongsegment</div>
+            <div class="sample narrow">supercalifragilisticexpialidocious</div>
+            <div class="sample narrow">这是一些中文文本用于换行测试</div>
+          </td>
+          <td class="cell" style="word-break: keep-all; overflow-wrap: anywhere">
+            <div class="sample narrow">hello world</div>
+            <div class="sample url">https://example.com/averyverylongsegment</div>
+            <div class="sample narrow">supercalifragilisticexpialidocious</div>
+            <div class="sample narrow">这是一些中文文本用于换行测试</div>
+          </td>
+        </tr>
+
+        <tr>
+          <th>anywhere</th>
+          <td class="cell" style="word-break: anywhere; overflow-wrap: normal">
+            <div class="sample narrow">hello world</div>
+            <div class="sample url">https://example.com/averyverylongsegment</div>
+            <div class="sample narrow">supercalifragilisticexpialidocious</div>
+            <div class="sample narrow">这是一些中文文本用于换行测试</div>
+          </td>
+          <td class="cell" style="word-break: anywhere; overflow-wrap: break-word">
+            <div class="sample narrow">hello world</div>
+            <div class="sample url">https://example.com/averyverylongsegment</div>
+            <div class="sample narrow">supercalifragilisticexpialidocious</div>
+            <div class="sample narrow">这是一些中文文本用于换行测试</div>
+          </td>
+          <td class="cell" style="word-break: anywhere; overflow-wrap: anywhere">
+            <div class="sample narrow">hello world</div>
+            <div class="sample url">https://example.com/averyverylongsegment</div>
+            <div class="sample narrow">supercalifragilisticexpialidocious</div>
+            <div class="sample narrow">这是一些中文文本用于换行测试</div>
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </body>
+</html>
+

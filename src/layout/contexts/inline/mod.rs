@@ -560,8 +560,10 @@ impl InlineFormattingContext {
         crate::style::position::Position::Absolute | crate::style::position::Position::Fixed
       ) {
         let box_id = ensure_box_id(child);
-        let containing_block_id = if matches!(child.style.position, crate::style::position::Position::Fixed)
-        {
+        let containing_block_id = if matches!(
+          child.style.position,
+          crate::style::position::Position::Fixed
+        ) {
           fixed_cb_stack.last().copied()
         } else {
           abs_cb_stack.last().copied()
@@ -1279,8 +1281,10 @@ impl InlineFormattingContext {
         crate::style::position::Position::Absolute | crate::style::position::Position::Fixed
       ) {
         let box_id = ensure_box_id(child);
-        let containing_block_id = if matches!(child.style.position, crate::style::position::Position::Fixed)
-        {
+        let containing_block_id = if matches!(
+          child.style.position,
+          crate::style::position::Position::Fixed
+        ) {
           fixed_cb_stack.last().copied()
         } else {
           abs_cb_stack.last().copied()
@@ -5653,8 +5657,15 @@ impl InlineFormattingContext {
     let mut last_break = 0;
     let mut hyphen_width: Option<f32> = None;
     let last_char = text_item.text.chars().last();
+    let include_emergency_breaks = matches!(text_item.style.word_break, WordBreak::Anywhere)
+      || matches!(text_item.style.overflow_wrap, OverflowWrap::Anywhere);
 
     for brk in &text_item.break_opportunities {
+      if brk.kind == crate::text::line_break::BreakOpportunityKind::Emergency
+        && !include_emergency_breaks
+      {
+        continue;
+      }
       if brk.byte_offset > len {
         continue;
       }
@@ -6639,14 +6650,17 @@ fn map_small_kana(ch: char) -> Option<char> {
   }
 }
 
-fn char_boundary_breaks(text: &str) -> Vec<crate::text::line_break::BreakOpportunity> {
+fn grapheme_boundary_breaks(
+  text: &str,
+  kind: crate::text::line_break::BreakOpportunityKind,
+) -> Vec<crate::text::line_break::BreakOpportunity> {
   use crate::text::line_break::BreakOpportunity;
   use unicode_segmentation::UnicodeSegmentation;
   let mut breaks = Vec::new();
   for (byte_idx, _) in text.grapheme_indices(true).skip(1) {
-    breaks.push(BreakOpportunity::allowed(byte_idx));
+    breaks.push(BreakOpportunity::allowed_with_kind(byte_idx, kind));
   }
-  breaks.push(BreakOpportunity::allowed(text.len()));
+  breaks.push(BreakOpportunity::allowed_with_kind(text.len(), kind));
   breaks
 }
 
@@ -6657,6 +6671,7 @@ fn apply_break_properties(
   overflow_wrap: OverflowWrap,
   allow_soft_wrap: bool,
 ) -> Vec<crate::text::line_break::BreakOpportunity> {
+  use crate::text::line_break::BreakOpportunityKind;
   use crate::text::line_break::BreakType;
 
   if !allow_soft_wrap {
@@ -6667,30 +6682,48 @@ fn apply_break_properties(
 
   match word_break {
     WordBreak::BreakAll => {
-      result.extend(char_boundary_breaks(text));
-    }
-    WordBreak::BreakWord | WordBreak::Anywhere => {
-      // CSS Text Level 4: break-word/anywhere behave like overflow-wrap:anywhere in addition
-      // to word-break: normal, so add break opportunities at every character boundary.
-      // word-break:anywhere follows the same behavior.
-      result.extend(char_boundary_breaks(text));
+      result.extend(grapheme_boundary_breaks(text, BreakOpportunityKind::Normal));
     }
     WordBreak::KeepAll => {
       result.retain(|brk| {
         if brk.break_type == BreakType::Mandatory {
           return true;
         }
-        let prev = text[..brk.byte_offset.min(text.len())].chars().next_back();
-        prev
-          .map(|c| c.is_whitespace() || c == '-' || c == '\u{00AD}')
-          .unwrap_or(false)
+        if brk.kind == BreakOpportunityKind::Emergency {
+          return true;
+        }
+        let pos = brk.byte_offset.min(text.len());
+        let prev = text[..pos].chars().next_back();
+        let next = text[pos..].chars().next();
+        !matches!(
+          (prev, next),
+          (Some(prev), Some(next)) if is_cjk_character(prev) && is_cjk_character(next)
+        )
       });
+    }
+    WordBreak::BreakWord => {
+      result.extend(grapheme_boundary_breaks(
+        text,
+        BreakOpportunityKind::Emergency,
+      ));
+    }
+    WordBreak::Anywhere => {
+      result.extend(grapheme_boundary_breaks(
+        text,
+        BreakOpportunityKind::Emergency,
+      ));
     }
     WordBreak::Normal => {}
   }
 
-  if matches!(overflow_wrap, OverflowWrap::Anywhere) {
-    result.extend(char_boundary_breaks(text));
+  match overflow_wrap {
+    OverflowWrap::Normal => {}
+    OverflowWrap::BreakWord | OverflowWrap::Anywhere => {
+      result.extend(grapheme_boundary_breaks(
+        text,
+        BreakOpportunityKind::Emergency,
+      ));
+    }
   }
 
   let mut sorted = true;
@@ -6720,11 +6753,17 @@ fn apply_break_properties(
         return false;
       }
       // Collapse to the strongest break at this offset, preserving any hyphen insertions.
-      if matches!(a.break_type, BreakType::Mandatory) || matches!(b.break_type, BreakType::Mandatory)
-      {
+      let is_mandatory = matches!(a.break_type, BreakType::Mandatory)
+        || matches!(b.break_type, BreakType::Mandatory);
+      if is_mandatory {
         b.break_type = BreakType::Mandatory;
+        b.kind = BreakOpportunityKind::Normal;
+      } else if matches!(a.kind, BreakOpportunityKind::Normal)
+        || matches!(b.kind, BreakOpportunityKind::Normal)
+      {
+        b.kind = BreakOpportunityKind::Normal;
       } else {
-        b.break_type = BreakType::Allowed;
+        b.kind = BreakOpportunityKind::Emergency;
       }
       b.adds_hyphen |= a.adds_hyphen;
       true
@@ -8804,18 +8843,16 @@ impl InlineFormattingContext {
             Ok((min, max)) => (Some(min), Some(max)),
             Err(err @ LayoutError::Timeout { .. }) => return Err(err),
             Err(_) => {
-              let min = match fc.compute_intrinsic_inline_size(
-                &layout_child,
-                IntrinsicSizingMode::MinContent,
-              ) {
+              let min = match fc
+                .compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MinContent)
+              {
                 Ok(value) => Some(value),
                 Err(err @ LayoutError::Timeout { .. }) => return Err(err),
                 Err(_) => None,
               };
-              let max = match fc.compute_intrinsic_inline_size(
-                &layout_child,
-                IntrinsicSizingMode::MaxContent,
-              ) {
+              let max = match fc
+                .compute_intrinsic_inline_size(&layout_child, IntrinsicSizingMode::MaxContent)
+              {
                 Ok(value) => Some(value),
                 Err(err @ LayoutError::Timeout { .. }) => return Err(err),
                 Err(_) => None,
@@ -10218,12 +10255,11 @@ mod tests {
 
     let mut override_style = base_style;
     override_style.writing_mode = WritingMode::VerticalRl;
-    let fragment = crate::layout::style_override::with_style_override(
-      root.id,
-      Arc::new(override_style),
-      || ifc.layout(&root, &constraints),
-    )
-    .expect("inline layout with style override should succeed");
+    let fragment =
+      crate::layout::style_override::with_style_override(root.id, Arc::new(override_style), || {
+        ifc.layout(&root, &constraints)
+      })
+      .expect("inline layout with style override should succeed");
 
     assert!((fragment.bounds.height() - 123.0).abs() < 0.01);
   }
@@ -12617,23 +12653,24 @@ mod tests {
       .collect_inline_items(&root, constraints.width().unwrap(), constraints.height())
       .unwrap();
     let strut = ifc.compute_strut_metrics(&root.style);
-    let lines = ifc.build_lines(
-      items,
-      constraints.width().unwrap(),
-      constraints.width().unwrap(),
-      true,
-      root.style.text_wrap,
-      0.0,
-      false,
-      false,
-      &strut,
-      Some(unicode_bidi::Level::ltr()),
-      root.style.direction,
-      root.style.unicode_bidi,
-      None,
-      0.0,
-    )
-    .unwrap();
+    let lines = ifc
+      .build_lines(
+        items,
+        constraints.width().unwrap(),
+        constraints.width().unwrap(),
+        true,
+        root.style.text_wrap,
+        0.0,
+        false,
+        false,
+        &strut,
+        Some(unicode_bidi::Level::ltr()),
+        root.style.direction,
+        root.style.unicode_bidi,
+        None,
+        0.0,
+      )
+      .unwrap();
     let first = lines.first().expect("first line");
     let resolved = resolve_auto_text_justify(TextJustify::Auto, &first.items);
     assert_eq!(resolved, TextJustify::InterCharacter);
@@ -12688,23 +12725,24 @@ mod tests {
       .collect_inline_items(&root, constraints.width().unwrap(), constraints.height())
       .unwrap();
     let strut = ifc.compute_strut_metrics(&root.style);
-    let lines = ifc.build_lines(
-      items,
-      constraints.width().unwrap(),
-      constraints.width().unwrap(),
-      true,
-      root.style.text_wrap,
-      0.0,
-      false,
-      false,
-      &strut,
-      Some(unicode_bidi::Level::ltr()),
-      root.style.direction,
-      root.style.unicode_bidi,
-      None,
-      0.0,
-    )
-    .unwrap();
+    let lines = ifc
+      .build_lines(
+        items,
+        constraints.width().unwrap(),
+        constraints.width().unwrap(),
+        true,
+        root.style.text_wrap,
+        0.0,
+        false,
+        false,
+        &strut,
+        Some(unicode_bidi::Level::ltr()),
+        root.style.direction,
+        root.style.unicode_bidi,
+        None,
+        0.0,
+      )
+      .unwrap();
     let first = lines.first().expect("first line");
     let resolved = resolve_auto_text_justify(TextJustify::Auto, &first.items);
     assert_eq!(resolved, TextJustify::Distribute);
@@ -12755,23 +12793,24 @@ mod tests {
       .collect_inline_items(&root, constraints.width().unwrap(), constraints.height())
       .unwrap();
     let strut = ifc.compute_strut_metrics(&root.style);
-    let lines = ifc.build_lines(
-      items,
-      constraints.width().unwrap(),
-      constraints.width().unwrap(),
-      true,
-      root.style.text_wrap,
-      0.0,
-      false,
-      false,
-      &strut,
-      Some(unicode_bidi::Level::ltr()),
-      root.style.direction,
-      root.style.unicode_bidi,
-      None,
-      0.0,
-    )
-    .unwrap();
+    let lines = ifc
+      .build_lines(
+        items,
+        constraints.width().unwrap(),
+        constraints.width().unwrap(),
+        true,
+        root.style.text_wrap,
+        0.0,
+        false,
+        false,
+        &strut,
+        Some(unicode_bidi::Level::ltr()),
+        root.style.direction,
+        root.style.unicode_bidi,
+        None,
+        0.0,
+      )
+      .unwrap();
     let first = lines.first().expect("first line");
     let resolved = resolve_auto_text_justify(TextJustify::Auto, &first.items);
     assert_eq!(resolved, TextJustify::InterWord);
@@ -12808,23 +12847,24 @@ mod tests {
       .collect_inline_items(&root, constraints.width().unwrap(), constraints.height())
       .expect("collect items");
     let strut = ifc.compute_strut_metrics(&root.style);
-    let lines = ifc.build_lines(
-      items,
-      constraints.width().unwrap(),
-      constraints.width().unwrap(),
-      true,
-      root.style.text_wrap,
-      0.0,
-      false,
-      false,
-      &strut,
-      Some(unicode_bidi::Level::ltr()),
-      root.style.direction,
-      root.style.unicode_bidi,
-      None,
-      0.0,
-    )
-    .unwrap();
+    let lines = ifc
+      .build_lines(
+        items,
+        constraints.width().unwrap(),
+        constraints.width().unwrap(),
+        true,
+        root.style.text_wrap,
+        0.0,
+        false,
+        false,
+        &strut,
+        Some(unicode_bidi::Level::ltr()),
+        root.style.direction,
+        root.style.unicode_bidi,
+        None,
+        0.0,
+      )
+      .unwrap();
     let first_line = lines.first().expect("line");
     eprintln!("items len={}", first_line.items.len());
     let total_width: f32 = first_line.items.iter().map(|p| p.item.width()).sum();
@@ -14001,23 +14041,24 @@ mod tests {
         );
 
     let strut = ifc.compute_strut_metrics(&container_style);
-    let lines = ifc.layout_segment_lines(
-      inline_items,
-      true,
-      200.0,
-      200.0,
-      ComputedStyle::default().text_wrap,
-      0.0,
-      false,
-      false,
-      &strut,
-      None,
-      crate::style::types::Direction::Ltr,
-      crate::style::types::UnicodeBidi::Plaintext,
-      None,
-      0.0,
-    )
-    .unwrap();
+    let lines = ifc
+      .layout_segment_lines(
+        inline_items,
+        true,
+        200.0,
+        200.0,
+        ComputedStyle::default().text_wrap,
+        0.0,
+        false,
+        false,
+        &strut,
+        None,
+        crate::style::types::Direction::Ltr,
+        crate::style::types::UnicodeBidi::Plaintext,
+        None,
+        0.0,
+      )
+      .unwrap();
     assert_eq!(lines.len(), 2, "mandatory breaks should split lines");
     assert_eq!(
       lines[0].resolved_direction,
@@ -14378,13 +14419,8 @@ mod tests {
       BreakOpportunity::allowed(2),
       BreakOpportunity::with_hyphen(2, BreakType::Allowed, true),
     ];
-    let result = apply_break_properties(
-      "abc",
-      breaks,
-      WordBreak::Normal,
-      OverflowWrap::Normal,
-      true,
-    );
+    let result =
+      apply_break_properties("abc", breaks, WordBreak::Normal, OverflowWrap::Normal, true);
 
     let mut at_1 = result.iter().filter(|b| b.byte_offset == 1);
     let brk_1 = at_1.next().expect("break at 1");
@@ -14401,6 +14437,54 @@ mod tests {
       brk_2.adds_hyphen,
       "hyphen insertion flags should survive deduplication"
     );
+  }
+
+  #[test]
+  fn apply_break_properties_marks_emergency_breaks_for_break_word() {
+    use crate::text::line_break::BreakOpportunityKind;
+
+    let text = "hello world";
+    let base = find_break_opportunities(text);
+    let result =
+      apply_break_properties(text, base, WordBreak::BreakWord, OverflowWrap::Normal, true);
+
+    let space_break = result
+      .iter()
+      .find(|b| b.byte_offset == 6)
+      .expect("space break");
+    assert_eq!(
+      space_break.kind,
+      BreakOpportunityKind::Normal,
+      "UAX breaks should remain normal even when emergency breaks are present"
+    );
+
+    let emergency_break = result
+      .iter()
+      .find(|b| b.byte_offset == 7)
+      .expect("emergency break after 'w'");
+    assert_eq!(
+      emergency_break.kind,
+      BreakOpportunityKind::Emergency,
+      "added breaks for break-word should be emergency-only"
+    );
+  }
+
+  #[test]
+  fn word_break_keep_all_only_suppresses_cjk_inter_character_breaks() {
+    let text = "你好/世界";
+    // Use explicit breaks so the test doesn't depend on UAX#14's specific break table for '/'.
+    let breaks = vec![
+      BreakOpportunity::allowed(3),  // 你|好 (CJK-CJK) should be removed
+      BreakOpportunity::allowed(6),  // 好|/ should remain
+      BreakOpportunity::allowed(7),  // /|世 should remain
+      BreakOpportunity::allowed(10), // 世|界 (CJK-CJK) should be removed
+      BreakOpportunity::allowed(13), // end of text
+    ];
+
+    let result =
+      apply_break_properties(text, breaks, WordBreak::KeepAll, OverflowWrap::Normal, true);
+    let offsets: Vec<usize> = result.iter().map(|b| b.byte_offset).collect();
+    assert_eq!(offsets, vec![6, 7, 13]);
   }
 
   #[test]
@@ -14440,7 +14524,7 @@ mod tests {
   }
 
   #[test]
-  fn word_break_break_word_reduces_min_content_width() {
+  fn word_break_break_word_keeps_min_content_width() {
     let mut text_style = ComputedStyle::default();
     text_style.word_break = WordBreak::BreakWord;
     text_style.white_space = WhiteSpace::Normal;
@@ -14468,8 +14552,8 @@ mod tests {
       .calculate_intrinsic_width(&normal, IntrinsicSizingMode::MinContent)
       .expect("min-content width");
     assert!(
-      breaking_min < normal_min * 0.75,
-      "break-word should add anywhere-style break opportunities and shrink min-content width"
+      (breaking_min - normal_min).abs() < 0.1,
+      "word-break: break-word should not reduce min-content widths"
     );
 
     let mut anywhere_style = text_style;
@@ -14679,6 +14763,40 @@ mod tests {
   }
 
   #[test]
+  fn overflow_wrap_anywhere_reduces_min_content_width() {
+    let mut text_style = ComputedStyle::default();
+    text_style.overflow_wrap = OverflowWrap::Anywhere;
+    text_style.white_space = WhiteSpace::Normal;
+    let breaking = BoxNode::new_block(
+      default_style(),
+      FormattingContextType::Block,
+      vec![BoxNode::new_text(
+        Arc::new(text_style),
+        "longtoken".to_string(),
+      )],
+    );
+    let normal = BoxNode::new_block(
+      default_style(),
+      FormattingContextType::Block,
+      vec![BoxNode::new_text(
+        Arc::new(ComputedStyle::default()),
+        "longtoken".to_string(),
+      )],
+    );
+    let ifc = InlineFormattingContext::new();
+    let breaking_min = ifc
+      .calculate_intrinsic_width(&breaking, IntrinsicSizingMode::MinContent)
+      .expect("min-content width");
+    let normal_min = ifc
+      .calculate_intrinsic_width(&normal, IntrinsicSizingMode::MinContent)
+      .expect("min-content width");
+    assert!(
+      breaking_min < normal_min * 0.75,
+      "overflow-wrap:anywhere should shrink min-content width by considering emergency breaks"
+    );
+  }
+
+  #[test]
   fn normal_collapses_vertical_tab_to_space() {
     let mut style = ComputedStyle::default();
     style.white_space = WhiteSpace::Normal;
@@ -14763,23 +14881,24 @@ mod tests {
       .create_inline_items_for_text(&node, "ab\tc", false)
       .unwrap();
     let strut = ifc.compute_strut_metrics(&node.style);
-    let lines = ifc.build_lines(
-      std::mem::take(&mut items),
-      1000.0,
-      1000.0,
-      true,
-      node.style.text_wrap,
-      0.0,
-      false,
-      false,
-      &strut,
-      None,
-      node.style.direction,
-      node.style.unicode_bidi,
-      None,
-      0.0,
-    )
-    .unwrap();
+    let lines = ifc
+      .build_lines(
+        std::mem::take(&mut items),
+        1000.0,
+        1000.0,
+        true,
+        node.style.text_wrap,
+        0.0,
+        false,
+        false,
+        &strut,
+        None,
+        node.style.direction,
+        node.style.unicode_bidi,
+        None,
+        0.0,
+      )
+      .unwrap();
     let line = &lines[0];
     assert_eq!(line.items.len(), 3);
 
@@ -14816,23 +14935,24 @@ mod tests {
       .create_inline_items_for_text(&node, "ab\tc", false)
       .unwrap();
     let strut = ifc.compute_strut_metrics(&node.style);
-    let lines = ifc.build_lines(
-      std::mem::take(&mut items),
-      1000.0,
-      1000.0,
-      true,
-      node.style.text_wrap,
-      0.0,
-      false,
-      false,
-      &strut,
-      None,
-      node.style.direction,
-      node.style.unicode_bidi,
-      None,
-      0.0,
-    )
-    .unwrap();
+    let lines = ifc
+      .build_lines(
+        std::mem::take(&mut items),
+        1000.0,
+        1000.0,
+        true,
+        node.style.text_wrap,
+        0.0,
+        false,
+        false,
+        &strut,
+        None,
+        node.style.direction,
+        node.style.unicode_bidi,
+        None,
+        0.0,
+      )
+      .unwrap();
     let line = &lines[0];
     assert_eq!(line.items.len(), 3);
 
@@ -14875,23 +14995,24 @@ mod tests {
     let items = ifc
       .collect_inline_items(&container, 200.0, Some(200.0))
       .expect("collect items");
-    let lines = ifc.build_lines(
-      items,
-      200.0,
-      200.0,
-      true,
-      container.style.text_wrap,
-      0.0,
-      false,
-      false,
-      &strut,
-      Some(unicode_bidi::Level::ltr()),
-      container.style.direction,
-      container.style.unicode_bidi,
-      Some(&float_ctx),
-      0.0,
-    )
-    .unwrap();
+    let lines = ifc
+      .build_lines(
+        items,
+        200.0,
+        200.0,
+        true,
+        container.style.text_wrap,
+        0.0,
+        false,
+        false,
+        &strut,
+        Some(unicode_bidi::Level::ltr()),
+        container.style.direction,
+        container.style.unicode_bidi,
+        Some(&float_ctx),
+        0.0,
+      )
+      .unwrap();
 
     let first = lines.first().expect("line");
     assert!(
@@ -14916,23 +15037,24 @@ mod tests {
       .create_inline_items_for_text(&node, "hello world", false)
       .unwrap();
     let strut = ifc.compute_strut_metrics(&style);
-    let lines = ifc.build_lines(
-      items,
-      50.0,
-      100.0,
-      true,
-      style.text_wrap,
-      0.0,
-      false,
-      false,
-      &strut,
-      Some(unicode_bidi::Level::ltr()),
-      style.direction,
-      style.unicode_bidi,
-      None,
-      0.0,
-    )
-    .unwrap();
+    let lines = ifc
+      .build_lines(
+        items,
+        50.0,
+        100.0,
+        true,
+        style.text_wrap,
+        0.0,
+        false,
+        false,
+        &strut,
+        Some(unicode_bidi::Level::ltr()),
+        style.direction,
+        style.unicode_bidi,
+        None,
+        0.0,
+      )
+      .unwrap();
 
     assert_eq!(lines.first().unwrap().box_width, 100.0);
   }
@@ -14949,43 +15071,45 @@ mod tests {
       .expect("inline items");
     let strut = ifc.compute_strut_metrics(&style);
 
-    let balanced = ifc.layout_segment_lines(
-      items.clone(),
-      true,
-      200.0,
-      200.0,
-      style.text_wrap,
-      0.0,
-      false,
-      false,
-      &strut,
-      Some(unicode_bidi::Level::ltr()),
-      style.direction,
-      style.unicode_bidi,
-      None,
-      0.0,
-    )
-    .unwrap();
+    let balanced = ifc
+      .layout_segment_lines(
+        items.clone(),
+        true,
+        200.0,
+        200.0,
+        style.text_wrap,
+        0.0,
+        false,
+        false,
+        &strut,
+        Some(unicode_bidi::Level::ltr()),
+        style.direction,
+        style.unicode_bidi,
+        None,
+        0.0,
+      )
+      .unwrap();
 
     let mut auto_style = style.clone();
     auto_style.text_wrap = TextWrap::Auto;
-    let auto = ifc.layout_segment_lines(
-      items,
-      true,
-      200.0,
-      200.0,
-      auto_style.text_wrap,
-      0.0,
-      false,
-      false,
-      &strut,
-      Some(unicode_bidi::Level::ltr()),
-      auto_style.direction,
-      auto_style.unicode_bidi,
-      None,
-      0.0,
-    )
-    .unwrap();
+    let auto = ifc
+      .layout_segment_lines(
+        items,
+        true,
+        200.0,
+        200.0,
+        auto_style.text_wrap,
+        0.0,
+        false,
+        false,
+        &strut,
+        Some(unicode_bidi::Level::ltr()),
+        auto_style.direction,
+        auto_style.unicode_bidi,
+        None,
+        0.0,
+      )
+      .unwrap();
 
     assert_eq!(balanced.len(), auto.len());
     let balanced_score = balance_score(&balanced, 1.5, 1.0);
@@ -15012,23 +15136,24 @@ mod tests {
       .expect("cjk items");
     let strut = ifc.compute_strut_metrics(&style);
 
-    let balanced = ifc.layout_segment_lines(
-      items,
-      true,
-      120.0,
-      120.0,
-      style.text_wrap,
-      0.0,
-      false,
-      false,
-      &strut,
-      Some(unicode_bidi::Level::ltr()),
-      style.direction,
-      style.unicode_bidi,
-      None,
-      0.0,
-    )
-    .unwrap();
+    let balanced = ifc
+      .layout_segment_lines(
+        items,
+        true,
+        120.0,
+        120.0,
+        style.text_wrap,
+        0.0,
+        false,
+        false,
+        &strut,
+        Some(unicode_bidi::Level::ltr()),
+        style.direction,
+        style.unicode_bidi,
+        None,
+        0.0,
+      )
+      .unwrap();
     assert!(balanced.len() > 1, "should wrap CJK text");
     let texts = line_texts(&balanced);
     let min_len = texts.iter().map(|t| t.chars().count()).min().unwrap();
@@ -15102,23 +15227,24 @@ mod tests {
     let items = ifc
       .create_inline_items_for_text(&node, text, false)
       .expect("hyphen items");
-    let lines = ifc.layout_segment_lines(
-      items,
-      true,
-      width,
-      width,
-      style.text_wrap,
-      0.0,
-      false,
-      false,
-      &strut,
-      Some(unicode_bidi::Level::ltr()),
-      style.direction,
-      style.unicode_bidi,
-      None,
-      0.0,
-    )
-    .unwrap();
+    let lines = ifc
+      .layout_segment_lines(
+        items,
+        true,
+        width,
+        width,
+        style.text_wrap,
+        0.0,
+        false,
+        false,
+        &strut,
+        Some(unicode_bidi::Level::ltr()),
+        style.direction,
+        style.unicode_bidi,
+        None,
+        0.0,
+      )
+      .unwrap();
 
     assert!(
       lines.iter().any(|line| {
@@ -15136,23 +15262,24 @@ mod tests {
     let manual_items = ifc
       .create_inline_items_for_text(&manual_node, text, false)
       .expect("manual items");
-    let manual_lines = ifc.layout_segment_lines(
-      manual_items,
-      true,
-      width,
-      width,
-      manual.text_wrap,
-      0.0,
-      false,
-      false,
-      &strut,
-      Some(unicode_bidi::Level::ltr()),
-      manual.direction,
-      manual.unicode_bidi,
-      None,
-      0.0,
-    )
-    .unwrap();
+    let manual_lines = ifc
+      .layout_segment_lines(
+        manual_items,
+        true,
+        width,
+        width,
+        manual.text_wrap,
+        0.0,
+        false,
+        false,
+        &strut,
+        Some(unicode_bidi::Level::ltr()),
+        manual.direction,
+        manual.unicode_bidi,
+        None,
+        0.0,
+      )
+      .unwrap();
 
     assert!(
       !manual_lines.iter().any(|line| {
@@ -15177,43 +15304,45 @@ mod tests {
       .expect("pretty items");
     let strut = ifc.compute_strut_metrics(&style);
 
-    let pretty = ifc.layout_segment_lines(
-      items.clone(),
-      true,
-      180.0,
-      180.0,
-      style.text_wrap,
-      0.0,
-      false,
-      false,
-      &strut,
-      Some(unicode_bidi::Level::ltr()),
-      style.direction,
-      style.unicode_bidi,
-      None,
-      0.0,
-    )
-    .unwrap();
+    let pretty = ifc
+      .layout_segment_lines(
+        items.clone(),
+        true,
+        180.0,
+        180.0,
+        style.text_wrap,
+        0.0,
+        false,
+        false,
+        &strut,
+        Some(unicode_bidi::Level::ltr()),
+        style.direction,
+        style.unicode_bidi,
+        None,
+        0.0,
+      )
+      .unwrap();
 
     let mut auto_style = style.clone();
     auto_style.text_wrap = TextWrap::Auto;
-    let auto = ifc.layout_segment_lines(
-      items,
-      true,
-      180.0,
-      180.0,
-      auto_style.text_wrap,
-      0.0,
-      false,
-      false,
-      &strut,
-      Some(unicode_bidi::Level::ltr()),
-      auto_style.direction,
-      auto_style.unicode_bidi,
-      None,
-      0.0,
-    )
-    .unwrap();
+    let auto = ifc
+      .layout_segment_lines(
+        items,
+        true,
+        180.0,
+        180.0,
+        auto_style.text_wrap,
+        0.0,
+        false,
+        false,
+        &strut,
+        Some(unicode_bidi::Level::ltr()),
+        auto_style.direction,
+        auto_style.unicode_bidi,
+        None,
+        0.0,
+      )
+      .unwrap();
 
     assert_eq!(pretty.len(), auto.len());
     let pretty_penalty = paragraph_short_last_penalty(&pretty);
@@ -15236,40 +15365,42 @@ mod tests {
       .expect("stable items");
     let strut = ifc.compute_strut_metrics(&style);
 
-    let narrow = ifc.layout_segment_lines(
-      items.clone(),
-      true,
-      150.0,
-      150.0,
-      style.text_wrap,
-      0.0,
-      false,
-      false,
-      &strut,
-      Some(unicode_bidi::Level::ltr()),
-      style.direction,
-      style.unicode_bidi,
-      None,
-      0.0,
-    )
-    .unwrap();
-    let wider = ifc.layout_segment_lines(
-      items.clone(),
-      true,
-      170.0,
-      170.0,
-      style.text_wrap,
-      0.0,
-      false,
-      false,
-      &strut,
-      Some(unicode_bidi::Level::ltr()),
-      style.direction,
-      style.unicode_bidi,
-      None,
-      0.0,
-    )
-    .unwrap();
+    let narrow = ifc
+      .layout_segment_lines(
+        items.clone(),
+        true,
+        150.0,
+        150.0,
+        style.text_wrap,
+        0.0,
+        false,
+        false,
+        &strut,
+        Some(unicode_bidi::Level::ltr()),
+        style.direction,
+        style.unicode_bidi,
+        None,
+        0.0,
+      )
+      .unwrap();
+    let wider = ifc
+      .layout_segment_lines(
+        items.clone(),
+        true,
+        170.0,
+        170.0,
+        style.text_wrap,
+        0.0,
+        false,
+        false,
+        &strut,
+        Some(unicode_bidi::Level::ltr()),
+        style.direction,
+        style.unicode_bidi,
+        None,
+        0.0,
+      )
+      .unwrap();
 
     let narrow_texts = line_texts(&narrow);
     let wider_texts = line_texts(&wider);
@@ -15277,40 +15408,42 @@ mod tests {
 
     let mut auto_style = style.clone();
     auto_style.text_wrap = TextWrap::Auto;
-    let auto_narrow = ifc.layout_segment_lines(
-      items.clone(),
-      true,
-      150.0,
-      150.0,
-      auto_style.text_wrap,
-      0.0,
-      false,
-      false,
-      &strut,
-      Some(unicode_bidi::Level::ltr()),
-      auto_style.direction,
-      auto_style.unicode_bidi,
-      None,
-      0.0,
-    )
-    .unwrap();
-    let auto_wide = ifc.layout_segment_lines(
-      items,
-      true,
-      170.0,
-      170.0,
-      auto_style.text_wrap,
-      0.0,
-      false,
-      false,
-      &strut,
-      Some(unicode_bidi::Level::ltr()),
-      auto_style.direction,
-      auto_style.unicode_bidi,
-      None,
-      0.0,
-    )
-    .unwrap();
+    let auto_narrow = ifc
+      .layout_segment_lines(
+        items.clone(),
+        true,
+        150.0,
+        150.0,
+        auto_style.text_wrap,
+        0.0,
+        false,
+        false,
+        &strut,
+        Some(unicode_bidi::Level::ltr()),
+        auto_style.direction,
+        auto_style.unicode_bidi,
+        None,
+        0.0,
+      )
+      .unwrap();
+    let auto_wide = ifc
+      .layout_segment_lines(
+        items,
+        true,
+        170.0,
+        170.0,
+        auto_style.text_wrap,
+        0.0,
+        false,
+        false,
+        &strut,
+        Some(unicode_bidi::Level::ltr()),
+        auto_style.direction,
+        auto_style.unicode_bidi,
+        None,
+        0.0,
+      )
+      .unwrap();
 
     assert_ne!(line_texts(&auto_narrow), line_texts(&auto_wide));
   }
@@ -15372,8 +15505,8 @@ mod tests {
     let root = BoxNode::new_inline(text_style, vec![node]);
 
     let ifc = InlineFormattingContext::new();
-    let constraints = LayoutConstraints::definite_width(120.0)
-      .with_used_border_box_size(Some(120.0), Some(200.0));
+    let constraints =
+      LayoutConstraints::definite_width(120.0).with_used_border_box_size(Some(120.0), Some(200.0));
     let fragment = ifc
       .layout_with_floats(&root, &constraints, None, 0.0)
       .expect("layout with used border box override");
