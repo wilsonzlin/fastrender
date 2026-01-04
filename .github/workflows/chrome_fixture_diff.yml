@@ -208,27 +208,32 @@ jobs:
 
       - name: Locate baseline report.json
         if: steps.download_baseline.outcome == 'success' || steps.download_baseline_legacy.outcome == 'success'
+        id: locate_baseline
         shell: bash
         run: |
           set -euo pipefail
 
+          baseline_found=0
+
           if [[ -f baseline/report.json ]]; then
-            echo "BASELINE_FOUND=1" >> "$GITHUB_ENV"
-            exit 0
+            baseline_found=1
+          else
+            match=$( (find baseline baseline_legacy -type f -name report.json 2>/dev/null || true) | head -n 1 )
+            if [[ -n "${match}" ]]; then
+              mkdir -p baseline
+              cp "${match}" baseline/report.json
+              baseline_found=1
+            fi
           fi
 
-          match=$( (find baseline baseline_legacy -type f -name report.json 2>/dev/null || true) | head -n 1 )
-          if [[ -z "${match}" ]]; then
+          if [[ "${baseline_found}" != "1" ]]; then
             echo "baseline artifact downloaded, but report.json was not found; skipping delta compare" >&2
-            exit 0
           fi
 
-          mkdir -p baseline
-          cp "${match}" baseline/report.json
-          echo "BASELINE_FOUND=1" >> "$GITHUB_ENV"
+          echo "baseline_found=${baseline_found}" >> "$GITHUB_OUTPUT"
 
       - name: Build compare_diff_reports
-        if: env.BASELINE_FOUND == '1'
+        if: steps.locate_baseline.outputs.baseline_found == '1'
         shell: bash
         run: |
           set -euo pipefail
@@ -236,7 +241,7 @@ jobs:
           echo "$PWD/target/release" >> "$GITHUB_PATH"
 
       - name: Compare diff reports vs main baseline
-        if: env.BASELINE_FOUND == '1'
+        if: steps.locate_baseline.outputs.baseline_found == '1'
         id: compare_delta
         shell: bash
         run: |
@@ -284,7 +289,7 @@ PY
             --regression-threshold-percent "${REGRESSION_THRESHOLD_PERCENT}"
 
       - name: Upload delta artifacts (delta.html + delta.json)
-        if: always() && env.BASELINE_FOUND == '1'
+        if: always() && steps.locate_baseline.outputs.baseline_found == '1'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.DELTA_ARTIFACT }}
@@ -296,6 +301,8 @@ PY
       - name: Step summary
         if: always()
         shell: bash
+        env:
+          BASELINE_FOUND: ${{ steps.locate_baseline.outputs.baseline_found }}
         run: |
           {
             echo "## Fixture vs Chrome diff report"
