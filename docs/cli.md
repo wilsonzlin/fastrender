@@ -215,7 +215,7 @@ Notes:
 - Run: `cargo run --release --bin render_fixtures -- --help`
 - Defaults: fixed, deterministic viewport/DPR (1200x800 @ 1.0) unless overridden.
 - Offline policy: fixtures are rendered **without network access**; only `file://` and `data:` subresources are allowed.
-- Fixture completeness: any subresource fetch failures (including blocked `http(s)://` URLs) are treated as fixture failures so offline captures stay self-contained.
+- Fixture completeness: any blocked `http(s)://` subresource (network access) is treated as a fixture failure so captures stay self-contained/offline. Other fetch errors are reported in `<fixture>.log` (and in `diagnostics.json` when `--write-snapshot` is enabled).
 - Fonts: uses bundled fonts (`FontConfig::bundled_only`) so outputs are stable across machines.
 - Output: by default writes `<fixture>.png` into `target/fixture_renders/` (override with `--out-dir`), plus `<fixture>.log` and `_summary.log`.
 - Optional snapshot: `--write-snapshot` writes `<out-dir>/<fixture>/snapshot.json` and `<out-dir>/<fixture>/diagnostics.json` (for later `diff_snapshots`).
