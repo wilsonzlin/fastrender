@@ -4874,6 +4874,7 @@ fn apply_morphology(
   } else {
     FILTER_DEADLINE_STRIDE
   };
+  let sample_check_stride = if window_area > 4096 { 4096 } else { 0 };
 
   let deadline = active_deadline();
   if row_len > 0 {
@@ -4902,12 +4903,19 @@ fn apply_morphology(
                 a: 1.0,
               },
             };
+            let mut sample_counter = 0usize;
             for dy in -ry..=ry {
               for dx in -rx..=rx {
                 let ny = (y + dy).clamp(0, height - 1);
                 let nx = (x + dx).clamp(0, width - 1);
                 let sample_idx = (ny as usize) * row_len + nx as usize;
                 let px = to_unpremultiplied(src[sample_idx]);
+                if sample_check_stride != 0 {
+                  sample_counter = sample_counter.wrapping_add(1);
+                  if sample_counter % sample_check_stride == 0 {
+                    check_active(RenderStage::Paint)?;
+                  }
+                }
                 match op {
                   MorphologyOp::Dilate => {
                     agg.r = agg.r.max(px.r);
