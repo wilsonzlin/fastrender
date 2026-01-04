@@ -31,6 +31,7 @@ use crate::error::{RenderError, RenderStage};
 use crate::geometry::Point;
 use crate::geometry::Rect;
 use crate::geometry::Size;
+use crate::layout::axis::{FragmentAxes, PhysicalAxis};
 use crate::layout::constraints::AvailableSpace as CrateAvailableSpace;
 use crate::layout::constraints::LayoutConstraints;
 use crate::layout::contexts::factory::FormattingContextFactory;
@@ -3641,14 +3642,27 @@ impl FormattingContext for GridFormattingContext {
     if let Err(RenderError::Timeout { elapsed, .. }) = check_active(RenderStage::Layout) {
       return Err(LayoutError::Timeout { elapsed });
     }
+    let mut has_running_children = false;
+    let mut has_running_deadline_counter = 0usize;
+    for child in &box_node.children {
+      check_layout_deadline(&mut has_running_deadline_counter)?;
+      if child.style.running_position.is_some() {
+        has_running_children = true;
+        break;
+      }
+    }
     let style_override = crate::layout::style_override::style_override_for(box_node.id);
-    if let Some(cached) = layout_cache_lookup(
-      box_node,
-      FormattingContextType::Grid,
-      constraints,
-      self.viewport_size,
-    ) {
-      return Ok(cached);
+    // Do not cache grid containers that contain running elements: running anchors are synthesized
+    // based on in-flow position, so reusing cached fragments can capture the wrong snapshot.
+    if !has_running_children {
+      if let Some(cached) = layout_cache_lookup(
+        box_node,
+        FormattingContextType::Grid,
+        constraints,
+        self.viewport_size,
+      ) {
+        return Ok(cached);
+      }
     }
     let style: &ComputedStyle = style_override
       .as_deref()
@@ -3665,13 +3679,20 @@ impl FormattingContext for GridFormattingContext {
     let mut taffy = crate::layout::taffy_integration::PooledTaffyTree::new();
     let mut positioned_children_map: FxHashMap<TaffyNodeId, Vec<*const BoxNode>> = FxHashMap::default();
 
-    // Partition children into in-flow vs. out-of-flow positioned.
+    // Partition children into running, in-flow vs. out-of-flow positioned.
     let mut in_flow_children: Vec<&BoxNode> = Vec::new();
     let mut positioned_children: Vec<&BoxNode> = Vec::new();
+    let mut running_children: Vec<(usize, BoxNode)> = Vec::new();
     let mut deadline_counter = 0usize;
     let mut child_has_subgrid = false;
-    for child in &box_node.children {
+    for (idx, child) in box_node.children.iter().enumerate() {
       check_layout_deadline(&mut deadline_counter)?;
+      if child.style.running_position.is_some() {
+        // Running elements do not participate in grid layout; instead, capture a snapshot at the
+        // position the element would have occupied in flow.
+        running_children.push((idx, child.clone()));
+        continue;
+      }
       match child.style.position {
         crate::style::position::Position::Absolute | crate::style::position::Position::Fixed => {
           positioned_children.push(child);
@@ -4354,13 +4375,249 @@ impl FormattingContext for GridFormattingContext {
         fragment.children_mut().push(child_fragment);
       }
     }
-    layout_cache_store(
-      box_node,
-      FormattingContextType::Grid,
-      constraints,
-      &fragment,
-      self.viewport_size,
-    );
+
+    if !running_children.is_empty() {
+      let mut id_to_bounds: FxHashMap<usize, Rect> =
+        FxHashMap::with_capacity_and_hasher(fragment.children.len(), Default::default());
+      let mut deadline_counter = 0usize;
+      for child in fragment.children.iter() {
+        check_layout_deadline(&mut deadline_counter)?;
+        let Some(box_id) = (match &child.content {
+          FragmentContent::Block { box_id }
+          | FragmentContent::Inline { box_id, .. }
+          | FragmentContent::Text { box_id, .. }
+          | FragmentContent::Replaced { box_id, .. } => *box_id,
+          FragmentContent::Line { .. } | FragmentContent::RunningAnchor { .. } => None,
+        }) else {
+          continue;
+        };
+        id_to_bounds.entry(box_id).or_insert(child.bounds);
+      }
+
+      let mut row_offsets: Option<Vec<f32>> = None;
+      let mut col_offsets: Option<Vec<f32>> = None;
+      if let DetailedLayoutInfo::Grid(info) = taffy.detailed_layout_info(root_id) {
+        if let Ok(container_style) = taffy.style(root_id) {
+          let percentage_base = constraints.width().unwrap_or(fragment.bounds.width());
+          let padding_left =
+            self.resolve_length_for_width(style.padding_left, percentage_base, style);
+          let padding_right =
+            self.resolve_length_for_width(style.padding_right, percentage_base, style);
+          let padding_top = self.resolve_length_for_width(style.padding_top, percentage_base, style);
+          let padding_bottom =
+            self.resolve_length_for_width(style.padding_bottom, percentage_base, style);
+          let border_left =
+            self.resolve_length_for_width(style.border_left_width, percentage_base, style);
+          let border_right =
+            self.resolve_length_for_width(style.border_right_width, percentage_base, style);
+          let border_top =
+            self.resolve_length_for_width(style.border_top_width, percentage_base, style);
+          let border_bottom =
+            self.resolve_length_for_width(style.border_bottom_width, percentage_base, style);
+
+          row_offsets = Some(compute_track_offsets(
+            &info.rows,
+            fragment.bounds.height(),
+            padding_top,
+            padding_bottom,
+            border_top,
+            border_bottom,
+            container_style
+              .align_content
+              .unwrap_or(taffy::style::AlignContent::Stretch),
+          ));
+          col_offsets = Some(compute_track_offsets(
+            &info.columns,
+            fragment.bounds.width(),
+            padding_left,
+            padding_right,
+            border_left,
+            border_right,
+            container_style
+              .justify_content
+              .unwrap_or(taffy::style::AlignContent::Stretch),
+          ));
+        }
+      }
+
+      let axes = FragmentAxes::from_writing_mode_and_direction(style.writing_mode, style.direction);
+      let snapshot_factory = self.factory.clone();
+
+      let parse_explicit_single_track = |raw: Option<&str>,
+                                         start: i32,
+                                         end: i32|
+       -> Option<(u16, u16)> {
+        if start > 0 && end > 0 && end == start + 1 {
+          return Some((start as u16, end as u16));
+        }
+        let raw = raw?;
+        let placement = parse_grid_line_placement_raw(raw);
+        let TaffyGridPlacement::Line(start_line) = placement.start else {
+          return None;
+        };
+        let TaffyGridPlacement::Line(end_line) = placement.end else {
+          return None;
+        };
+        let start = start_line.as_i16();
+        let end = end_line.as_i16();
+        if start > 0 && end > 0 && end == start + 1 {
+          Some((start as u16, end as u16))
+        } else {
+          None
+        }
+      };
+
+      for (order, (running_idx, running_child)) in running_children.into_iter().enumerate() {
+        check_layout_deadline(&mut deadline_counter)?;
+        let Some(name) = running_child.style.running_position.clone() else {
+          continue;
+        };
+
+        let mut anchor_x = 0.0f32;
+        let mut anchor_y = 0.0f32;
+
+        if let Some((_, next_child)) = box_node
+          .children
+          .iter()
+          .enumerate()
+          .filter(|(idx, child)| {
+            *idx > running_idx
+              && child.style.running_position.is_none()
+              && !matches!(
+                child.style.position,
+                crate::style::position::Position::Absolute | crate::style::position::Position::Fixed
+              )
+          })
+          .min_by_key(|(idx, _)| *idx)
+        {
+          if let Some(bounds) = id_to_bounds.get(&ensure_box_id(next_child)) {
+            anchor_x = bounds.x();
+            anchor_y = bounds.y();
+          }
+        } else if let Some((_, last_child)) = box_node
+          .children
+          .iter()
+          .enumerate()
+          .filter(|(_, child)| {
+            child.style.running_position.is_none()
+              && !matches!(
+                child.style.position,
+                crate::style::position::Position::Absolute | crate::style::position::Position::Fixed
+              )
+          })
+          .max_by_key(|(idx, _)| *idx)
+        {
+          if let Some(bounds) = id_to_bounds.get(&ensure_box_id(last_child)) {
+            match axes.block_axis() {
+              PhysicalAxis::Y => {
+                anchor_x = bounds.x();
+                anchor_y = bounds.max_y();
+              }
+              PhysicalAxis::X => {
+                anchor_y = bounds.y();
+                anchor_x = if axes.block_positive() {
+                  bounds.max_x()
+                } else {
+                  bounds.x()
+                };
+              }
+            }
+          }
+        } else {
+          match axes.block_axis() {
+            PhysicalAxis::Y => {
+              anchor_y = fragment.bounds.height();
+            }
+            PhysicalAxis::X => {
+              anchor_x = if axes.block_positive() {
+                fragment.bounds.width()
+              } else {
+                0.0
+              };
+            }
+          }
+        }
+
+        let mut area_w: Option<f32> = None;
+        let mut area_h: Option<f32> = None;
+
+        if let Some(col_offsets) = col_offsets.as_ref() {
+          if let Some((start_line, end_line)) = parse_explicit_single_track(
+            running_child.style.grid_column_raw.as_deref(),
+            running_child.style.grid_column_start,
+            running_child.style.grid_column_end,
+          ) {
+            if let Some((start, end)) = grid_area_for_item(col_offsets, start_line, end_line) {
+              anchor_x = start;
+              area_w = Some((end - start).max(0.0));
+            }
+          }
+        }
+
+        if let Some(row_offsets) = row_offsets.as_ref() {
+          if let Some((start_line, end_line)) = parse_explicit_single_track(
+            running_child.style.grid_row_raw.as_deref(),
+            running_child.style.grid_row_start,
+            running_child.style.grid_row_end,
+          ) {
+            if let Some((start, end)) = grid_area_for_item(row_offsets, start_line, end_line) {
+              anchor_y = start;
+              area_h = Some((end - start).max(0.0));
+            }
+          }
+        }
+
+        let mut snapshot_node = running_child.clone();
+        let mut snapshot_style = snapshot_node.style.as_ref().clone();
+        snapshot_style.running_position = None;
+        snapshot_style.position = crate::style::position::Position::Static;
+        snapshot_node.style = Arc::new(snapshot_style);
+
+        let fc_type = snapshot_node
+          .formatting_context()
+          .unwrap_or(FormattingContextType::Block);
+        let fc = snapshot_factory.get(fc_type);
+
+        let snapshot_constraints = if let (Some(w), Some(h)) = (area_w, area_h) {
+          LayoutConstraints::new(
+            CrateAvailableSpace::Definite(w.max(0.0)),
+            CrateAvailableSpace::Definite(h.max(0.0)),
+          )
+          .with_used_border_box_size(Some(w.max(0.0)), Some(h.max(0.0)))
+          .with_inline_percentage_base(Some(w.max(0.0)))
+        } else {
+          let container_w = fragment.bounds.width().max(0.0);
+          LayoutConstraints::new(
+            CrateAvailableSpace::Definite(container_w),
+            CrateAvailableSpace::Indefinite,
+          )
+        };
+
+        match fc.layout(&snapshot_node, &snapshot_constraints) {
+          Ok(snapshot_fragment) => {
+            let eps = (order as f32) * 1e-4;
+            let offset = axes.block_offset(eps);
+            let anchor_bounds =
+              Rect::from_xywh(anchor_x + offset.x, anchor_y + offset.y, 0.0, 0.01);
+            let mut anchor = FragmentNode::new_running_anchor(anchor_bounds, name, snapshot_fragment);
+            anchor.style = Some(running_child.style.clone());
+            fragment.children_mut().push(anchor);
+          }
+          Err(err @ LayoutError::Timeout { .. }) => return Err(err),
+          Err(_) => {}
+        }
+      }
+    }
+
+    if !has_running_children {
+      layout_cache_store(
+        box_node,
+        FormattingContextType::Grid,
+        constraints,
+        &fragment,
+        self.viewport_size,
+      );
+    }
 
     Ok(fragment)
   }

@@ -586,7 +586,7 @@ fn running_element_in_flex_is_out_of_flow_and_available_to_margin_boxes() {
           @page {
             size: 200px 200px;
             margin: 20px;
-            @top-left { content: element(header); }
+            @top-center { content: element(header); }
           }
           body { margin: 0; }
           .flex { display: flex; flex-direction: column; gap: 8px; }
@@ -625,6 +625,65 @@ fn running_element_in_flex_is_out_of_flow_and_available_to_margin_boxes() {
     "running element should be available to margin boxes"
   );
   let header_y = find_text_position(first_page, "Flex", (0.0, 0.0))
+    .expect("running header in margin box")
+    .1;
+  let content_y = first_page.bounds.y() + content.bounds.y();
+  assert!(
+    header_y < content_y,
+    "header should appear in the page margin area"
+  );
+}
+
+#[test]
+fn running_element_in_grid_is_available_to_margin_boxes() {
+  let html = r#"
+    <html>
+      <head>
+        <style>
+          @page {
+            size: 200px 200px;
+            margin: 20px;
+            @top-left { content: element(header); }
+          }
+          body { margin: 0; }
+          .grid { display: grid; grid-template-columns: 40px 60px; }
+          .running { position: running(header); grid-column: 2 / 3; padding: 4px; }
+          .cell { padding: 4px; }
+          .tall { height: 400px; }
+        </style>
+      </head>
+      <body>
+        <div class="grid">
+          <div class="running">Grid Header</div>
+          <div class="cell">Cell</div>
+        </div>
+        <div class="tall">Body content</div>
+      </body>
+    </html>
+  "#;
+
+  let mut renderer = FastRender::new().unwrap();
+  let dom = renderer.parse_html(html).unwrap();
+  let tree = renderer.layout_document(&dom, 200, 200).unwrap();
+  let page_roots = pages(&tree);
+
+  assert!(
+    page_roots.len() >= 2,
+    "tall content should paginate across multiple pages"
+  );
+
+  let first_page = page_roots[0];
+  let content = first_page.children.first().expect("page content");
+  assert!(
+    !collected_text_compacted(content).contains("GridHeader"),
+    "running element should not paint in normal flow"
+  );
+
+  assert!(
+    margin_boxes_contain_text(first_page, "Grid Header"),
+    "running element should be available to margin boxes"
+  );
+  let header_y = find_text_position(first_page, "Grid", (0.0, 0.0))
     .expect("running header in margin box")
     .1;
   let content_y = first_page.bounds.y() + content.bounds.y();
