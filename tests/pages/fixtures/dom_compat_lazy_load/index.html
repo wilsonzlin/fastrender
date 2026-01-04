@@ -1,0 +1,54 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        height: 100%;
+        background: rgb(0, 255, 0);
+      }
+
+      body {
+        display: flex;
+        flex-direction: column;
+      }
+
+      picture,
+      img {
+        display: block;
+      }
+
+      img {
+        width: 64px;
+        height: 32px;
+      }
+    </style>
+  </head>
+  <body>
+    <!--
+      Intentionally uses a transparent 1x1 GIF placeholder so a static/no-JS render only shows the
+      green background unless dom compatibility mode lifts `data-src`/`data-srcset`.
+    -->
+    <img
+      width="64"
+      height="32"
+      src="data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw=="
+      data-src="red.svg"
+      alt=""
+    />
+
+    <picture>
+      <source data-srcset="blue.svg" />
+      <img
+        width="64"
+        height="32"
+        src="data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw=="
+        alt=""
+      />
+    </picture>
+  </body>
+</html>

@@ -18,12 +18,21 @@ Compatibility mode applies a small, generic set of mutations:
 
 - If the `<html>` element has a `no-js` class, replace it with `js-enabled`
 - Add `jsl10n-visible` to `<html>` and `<body>` when missing
-- If an `<img>` or `<source>` element is missing `src`/`srcset` (or uses a common
-  placeholder `src` like `about:blank` or a 1×1 transparent GIF `data:` URL),
-  copy common lazy-load `data-*` attributes (`data-src`, `data-lazy-src`,
-  `data-gl-src`, `data-srcset`, etc.) into the real attributes so CSS like
-  `img:not([src]):not([srcset]) { visibility: hidden }` doesn't permanently
-  suppress the image in static renders.
+- Lift common lazy-load URL stashes into real attributes (without executing JS):
+  - `<img>`: if `src` is missing/empty **or** set to a recognized placeholder (`about:blank`, `#`,
+    common 1×1 GIF `data:` URLs), copy from the first non-empty candidate among:
+    - `data-gl-src`, `data-src`, `data-lazy-src`, `data-original`, `data-url`, `data-actualsrc`,
+      `data-img-src`, `data-hires`, `data-src-retina`
+  - `<img>`: if `srcset` is missing/empty, copy from the first non-empty candidate among:
+    - `data-gl-srcset`, `data-srcset`, `data-lazy-srcset`, `data-original-srcset`,
+      `data-original-set`, `data-actualsrcset`
+  - `<img>` / `<source>`: if `sizes` is missing/empty, copy from `data-sizes`.
+  - `<picture><source>`: if `srcset` is missing/empty, lift from the same `data-srcset` candidates
+    as `<img>`.
+  - `<iframe>`: if `src` is missing/empty (or placeholder), lift from `data-src`.
+
+These lifts intentionally **do not overwrite** non-empty, non-placeholder author-provided
+`src`/`srcset` values.
 
 Leaving compatibility mode at `DomCompatibilityMode::Standard` (the default) keeps the
 parsed DOM spec-faithful.

@@ -3132,7 +3132,7 @@ pub fn compute_part_export_map_with_ids(
   Ok(map)
 }
 
-pub(crate) const COMPAT_IMG_SRC_DATA_ATTR_CANDIDATES: [&str; 7] = [
+pub(crate) const COMPAT_IMG_SRC_DATA_ATTR_CANDIDATES: [&str; 9] = [
   "data-gl-src",
   "data-src",
   "data-lazy-src",
@@ -3140,21 +3140,25 @@ pub(crate) const COMPAT_IMG_SRC_DATA_ATTR_CANDIDATES: [&str; 7] = [
   "data-url",
   "data-actualsrc",
   "data-img-src",
+  "data-hires",
+  "data-src-retina",
 ];
 
-pub(crate) const COMPAT_IMG_SRCSET_DATA_ATTR_CANDIDATES: [&str; 5] = [
+pub(crate) const COMPAT_IMG_SRCSET_DATA_ATTR_CANDIDATES: [&str; 6] = [
   "data-gl-srcset",
   "data-srcset",
   "data-lazy-srcset",
   "data-original-srcset",
+  "data-original-set",
   "data-actualsrcset",
 ];
 
-pub(crate) const COMPAT_SOURCE_SRCSET_DATA_ATTR_CANDIDATES: [&str; 5] = [
+pub(crate) const COMPAT_SOURCE_SRCSET_DATA_ATTR_CANDIDATES: [&str; 6] = [
   "data-srcset",
   "data-lazy-srcset",
   "data-gl-srcset",
   "data-original-srcset",
+  "data-original-set",
   "data-actualsrcset",
 ];
 
@@ -3324,9 +3328,9 @@ fn apply_dom_compatibility_mutations(
         // from the following attributes, in priority order:
         //
         // - `src` ← `data-gl-src`, `data-src`, `data-lazy-src`, `data-original`, `data-url`,
-        //   `data-actualsrc`, `data-img-src`
+        //   `data-actualsrc`, `data-img-src`, `data-hires`, `data-src-retina`
         // - `srcset` ← `data-gl-srcset`, `data-srcset`, `data-lazy-srcset`, `data-original-srcset`,
-        //   `data-actualsrcset`
+        //   `data-original-set`, `data-actualsrcset`
         // - `sizes` ← `data-sizes`
         //
         // Never override a non-empty authored attribute (except for known `src` placeholders like
@@ -3453,6 +3457,29 @@ fn apply_dom_compatibility_mutations(
               }
               None => {
                 attributes.push(("sizes".to_string(), candidate));
+              }
+            }
+          }
+        }
+      } else if tag_name.eq_ignore_ascii_case("iframe") {
+        // Lazy iframe embeds often store the real URL in `data-src` until JS runs.
+        let src_idx = attributes
+          .iter()
+          .position(|(name, _)| name.eq_ignore_ascii_case("src"));
+        let needs_src = match src_idx {
+          Some(idx) => img_src_is_placeholder(&attributes[idx].1),
+          None => true,
+        };
+        if needs_src {
+          if let Some(candidate) = first_non_empty_attr(attributes, &["data-src"]) {
+            match src_idx {
+              Some(idx) => {
+                if img_src_is_placeholder(&attributes[idx].1) {
+                  attributes[idx].1 = candidate;
+                }
+              }
+              None => {
+                attributes.push(("src".to_string(), candidate));
               }
             }
           }

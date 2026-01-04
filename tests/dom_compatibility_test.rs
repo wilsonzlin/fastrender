@@ -104,8 +104,10 @@ fn compatibility_mode_preserves_shadow_slot_distribution() {
   let standard_ids = enumerate_dom_ids(&standard_dom);
   let compat_ids = enumerate_dom_ids(&compat_dom);
 
-  let standard_assignment = compute_slot_assignment_with_ids(&standard_dom, &standard_ids);
-  let compat_assignment = compute_slot_assignment_with_ids(&compat_dom, &compat_ids);
+  let standard_assignment = compute_slot_assignment_with_ids(&standard_dom, &standard_ids)
+    .expect("standard slot assignment");
+  let compat_assignment =
+    compute_slot_assignment_with_ids(&compat_dom, &compat_ids).expect("compat slot assignment");
 
   let mut standard_id_to_node = HashMap::new();
   build_id_to_node(&standard_dom, &standard_ids, &mut standard_id_to_node);
@@ -198,4 +200,162 @@ fn compatibility_mode_preserves_shadow_slot_distribution() {
     .values()
     .flatten()
     .all(|id| compat_id_to_node.contains_key(id)));
+}
+
+#[test]
+fn compatibility_mode_lifts_img_src_from_lazy_data_attributes() {
+  let html = r#"<html><body><img data-src="https://example.com/a.jpg"></body></html>"#;
+
+  let standard_dom = parse_html(html).expect("parse standard DOM");
+  let standard_img = find_element(&standard_dom, "img").expect("standard img element");
+  assert!(
+    standard_img.get_attribute_ref("src").is_none(),
+    "standard mode should not mutate img src"
+  );
+
+  let compat_dom =
+    parse_html_with_options(html, DomParseOptions::compatibility()).expect("parse compat DOM");
+  let compat_img = find_element(&compat_dom, "img").expect("compat img element");
+  assert_eq!(
+    compat_img.get_attribute_ref("src"),
+    Some("https://example.com/a.jpg"),
+    "compat mode should lift data-src into src"
+  );
+}
+
+#[test]
+fn compatibility_mode_lifts_img_src_from_data_src_retina() {
+  let html = r#"<html><body><img data-src-retina="retina.jpg"></body></html>"#;
+  let compat_dom =
+    parse_html_with_options(html, DomParseOptions::compatibility()).expect("parse compat DOM");
+  let compat_img = find_element(&compat_dom, "img").expect("compat img element");
+  assert_eq!(
+    compat_img.get_attribute_ref("src"),
+    Some("retina.jpg"),
+    "compat mode should lift data-src-retina into src"
+  );
+}
+
+#[test]
+fn compatibility_mode_overwrites_placeholder_img_src_but_not_real_src() {
+  let placeholder_html =
+    r#"<html><body><img src="about:blank" data-src="assets/photo.jpg"></body></html>"#;
+  let standard_dom = parse_html(placeholder_html).expect("parse standard DOM");
+  let compat_dom = parse_html_with_options(placeholder_html, DomParseOptions::compatibility())
+    .expect("parse compat DOM");
+
+  let standard_img = find_element(&standard_dom, "img").expect("standard img element");
+  assert_eq!(
+    standard_img.get_attribute_ref("src"),
+    Some("about:blank"),
+    "standard mode should preserve placeholder src"
+  );
+
+  let compat_img = find_element(&compat_dom, "img").expect("compat img element");
+  assert_eq!(
+    compat_img.get_attribute_ref("src"),
+    Some("assets/photo.jpg"),
+    "compat mode should overwrite placeholder src with data-src"
+  );
+
+  let real_html = r#"<html><body><img src="real.jpg" data-src="lazy.jpg"></body></html>"#;
+  let compat_dom =
+    parse_html_with_options(real_html, DomParseOptions::compatibility()).expect("parse compat DOM");
+  let compat_img = find_element(&compat_dom, "img").expect("compat img element");
+  assert_eq!(
+    compat_img.get_attribute_ref("src"),
+    Some("real.jpg"),
+    "compat mode should not overwrite a non-placeholder src"
+  );
+}
+
+#[test]
+fn compatibility_mode_lifts_srcset_for_img_and_picture_sources() {
+  let img_html =
+    r#"<html><body><img data-original-set="a.jpg 1x, b.jpg 2x"></body></html>"#;
+  let standard_dom = parse_html(img_html).expect("parse standard DOM");
+  let standard_img = find_element(&standard_dom, "img").expect("standard img element");
+  assert!(
+    standard_img.get_attribute_ref("srcset").is_none(),
+    "standard mode should not mutate img srcset"
+  );
+
+  let compat_dom = parse_html_with_options(img_html, DomParseOptions::compatibility())
+    .expect("parse compat DOM");
+  let compat_img = find_element(&compat_dom, "img").expect("compat img element");
+  assert_eq!(
+    compat_img.get_attribute_ref("srcset"),
+    Some("a.jpg 1x, b.jpg 2x"),
+    "compat mode should lift data-original-set into srcset"
+  );
+
+  let picture_html = r#"<html><body><picture><source data-srcset="c.webp 1x"><img src="data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw=="></picture></body></html>"#;
+  let standard_dom = parse_html(picture_html).expect("parse standard DOM");
+  let compat_dom = parse_html_with_options(picture_html, DomParseOptions::compatibility())
+    .expect("parse compat DOM");
+
+  let standard_source = find_element(&standard_dom, "source").expect("standard source element");
+  assert!(
+    standard_source.get_attribute_ref("srcset").is_none(),
+    "standard mode should not mutate <picture><source> srcset"
+  );
+
+  let compat_source = find_element(&compat_dom, "source").expect("compat source element");
+  assert_eq!(
+    compat_source.get_attribute_ref("srcset"),
+    Some("c.webp 1x"),
+    "compat mode should lift data-srcset into <picture><source> srcset"
+  );
+}
+
+#[test]
+fn compatibility_mode_lifts_sizes_from_data_sizes() {
+  let html = r#"<html><body><img data-src="a.jpg" data-sizes="100vw"></body></html>"#;
+
+  let standard_dom = parse_html(html).expect("parse standard DOM");
+  let standard_img = find_element(&standard_dom, "img").expect("standard img element");
+  assert!(
+    standard_img.get_attribute_ref("sizes").is_none(),
+    "standard mode should not mutate img sizes"
+  );
+
+  let compat_dom =
+    parse_html_with_options(html, DomParseOptions::compatibility()).expect("parse compat DOM");
+  let compat_img = find_element(&compat_dom, "img").expect("compat img element");
+  assert_eq!(
+    compat_img.get_attribute_ref("sizes"),
+    Some("100vw"),
+    "compat mode should lift data-sizes into sizes"
+  );
+}
+
+#[test]
+fn compatibility_mode_lifts_iframe_src_from_data_src() {
+  let html = r#"<html><body><iframe data-src="https://example.com/embed"></iframe></body></html>"#;
+
+  let standard_dom = parse_html(html).expect("parse standard DOM");
+  let standard_iframe = find_element(&standard_dom, "iframe").expect("standard iframe element");
+  assert!(
+    standard_iframe.get_attribute_ref("src").is_none(),
+    "standard mode should not mutate iframe src"
+  );
+
+  let compat_dom =
+    parse_html_with_options(html, DomParseOptions::compatibility()).expect("parse compat DOM");
+  let compat_iframe = find_element(&compat_dom, "iframe").expect("compat iframe element");
+  assert_eq!(
+    compat_iframe.get_attribute_ref("src"),
+    Some("https://example.com/embed"),
+    "compat mode should lift iframe data-src into src"
+  );
+
+  let placeholder_html = r#"<html><body><iframe src="about:blank" data-src="https://example.com/embed"></iframe></body></html>"#;
+  let compat_dom = parse_html_with_options(placeholder_html, DomParseOptions::compatibility())
+    .expect("parse compat DOM");
+  let compat_iframe = find_element(&compat_dom, "iframe").expect("compat iframe element");
+  assert_eq!(
+    compat_iframe.get_attribute_ref("src"),
+    Some("https://example.com/embed"),
+    "compat mode should overwrite placeholder iframe src"
+  );
 }
