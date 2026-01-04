@@ -50,6 +50,9 @@ For accuracy tasks, evidence should usually be one of:
 scripts/pageset.sh
 # or:
 cargo xtask pageset
+# or (auto-capture offline fixtures for failing pages from the warmed disk cache;
+# scans progress/pages/*.json and imports missing fixtures under tests/pages/fixtures/):
+cargo xtask pageset --capture-missing-failure-fixtures
 ```
 
 **Inspect the committed scoreboard:**

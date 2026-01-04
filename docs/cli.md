@@ -63,13 +63,18 @@ FASTR_HTTP_BACKEND=reqwest FASTR_HTTP_BROWSER_HEADERS=1 \
 - Help: `cargo xtask --help`
 - Tests: `cargo xtask test [core|style|fixtures|wpt|all]`
 - Refresh goldens: `cargo xtask update-goldens [all|fixtures|reference|wpt]` (sets the appropriate `UPDATE_*` env vars)
-- Pageset scoreboard (`fetch_pages` → `prefetch_assets` → `pageset_progress` when disk cache is enabled; bundled fonts by default): `cargo xtask pageset [--pages example.com,news.ycombinator.com] [--shard 0/4] [--no-fetch] [--refresh] [--allow-http-error-status] [--allow-collisions] [--timings] [--disk-cache] [--no-disk-cache] [--cache-dir <dir>] [--cascade-diagnostics] [--cascade-diagnostics-slow-ms 500] [-- <pageset_progress args...>]`
+- Pageset scoreboard (`fetch_pages` → `prefetch_assets` → `pageset_progress` when disk cache is enabled; bundled fonts by default): `cargo xtask pageset [--pages example.com,news.ycombinator.com] [--shard 0/4] [--no-fetch] [--refresh] [--allow-http-error-status] [--allow-collisions] [--timings] [--disk-cache] [--no-disk-cache] [--cache-dir <dir>] [--cascade-diagnostics] [--cascade-diagnostics-slow-ms 500] [--capture-missing-failure-fixtures] [-- <pageset_progress args...>]`
   - Sharded example: `cargo xtask pageset --shard 0/4` (applies to fetch + prefetch (disk cache only) + render; add `--no-fetch` to reuse cached pages)
   - Forward compatibility gates when needed: `--compat-profile site` and/or `--dom-compat compat` are passed through to `pageset_progress run` but remain off by default.
   - Disk cache directory override: `--cache-dir <dir>` is forwarded to both `prefetch_assets` and `pageset_progress` so the warmed cache matches the render step (defaults to `fetches/assets/`).
   - Disk cache tuning flags passed after `--` (e.g. `--disk-cache-max-bytes`, `--disk-cache-max-age-secs`, `--disk-cache-lock-stale-secs`) are also forwarded to `prefetch_assets` when it runs.
   - Prefetch tuning flags passed after `--` (e.g. `--prefetch-fonts`, `--prefetch-images`, `--prefetch-iframes`) are also forwarded to `prefetch_assets` when it runs.
   - Cascade triage: `--cascade-diagnostics` re-runs slow-cascade ok pages (defaults to 500ms threshold; override with `--cascade-diagnostics-slow-ms`) plus cascade timeouts with cascade profiling enabled, then merges `diagnostics.stats.cascade` into the committed progress JSON.
+  - Fixture capture helper: `--capture-missing-failure-fixtures` scans `progress/pages/*.json` after the run and, for each `status != ok` page missing `tests/pages/fixtures/<stem>/index.html`, captures a bundle from the warmed disk cache (`bundle_page cache`) and imports it via `cargo xtask import-page-fixture`.
+    - Requires disk cache enabled (either by default, or explicitly via `--disk-cache`; it is skipped with a warning when disk cache is disabled).
+    - Override intermediate bundle output: `--capture-missing-failure-fixtures-out-dir <dir>` (default: `target/pageset_failure_fixture_bundles`).
+    - Use `--capture-missing-failure-fixtures-allow-missing-resources` to allow incomplete caches (`bundle_page cache --allow-missing` + `import-page-fixture --allow-missing`).
+    - Use `--capture-missing-failure-fixtures-overwrite` to replace existing fixture directories on import.
 - Pageset diff: `cargo xtask pageset-diff [--baseline <dir>|--baseline-ref <git-ref>] [--no-run] [--fail-on-regression] [--fail-on-missing-stages] [--fail-on-missing-stage-timings] [--fail-on-slow-ok-ms <ms>]`
   - Extracts `progress/pages` from the chosen git ref by default and compares it to the freshly updated scoreboard.
   - `--fail-on-regression` also enables the missing-stage gates and `--fail-on-slow-ok-ms=5000` by default (use `--no-fail-on-missing-stages` / `--no-fail-on-missing-stage-timings` / `--no-fail-on-slow-ok` to opt out, or pass `--fail-on-slow-ok-ms <ms>` to override the default threshold).
