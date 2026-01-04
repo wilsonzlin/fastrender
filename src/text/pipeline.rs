@@ -3763,6 +3763,10 @@ fn font_is_emoji_font(db: &FontDatabase, id: Option<fontdb::ID>, font: &LoadedFo
     if let Some(is_color) = db.is_color_capable_font(id) {
       return is_color;
     }
+  } else if let Some(is_color) =
+    crate::text::face_cache::with_face(font, crate::text::font_db::face_has_color_tables)
+  {
+    return is_color;
   }
 
   FontDatabase::family_name_is_emoji_font(&font.family)

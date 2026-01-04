@@ -137,11 +137,15 @@ fn stretch_order_key(candidate: f32, desired: f32) -> (u8, f32) {
   }
 }
 
-pub(crate) fn font_is_emoji_font(db: &FontDatabase, id: Option<ID>, font: &LoadedFont) -> bool {
+pub fn font_is_emoji_font(db: &FontDatabase, id: Option<ID>, font: &LoadedFont) -> bool {
   if let Some(id) = id {
     if let Some(is_color) = db.is_color_capable_font(id) {
       return is_color;
     }
+  } else if let Some(is_color) =
+    crate::text::face_cache::with_face(font, crate::text::font_db::face_has_color_tables)
+  {
+    return is_color;
   }
 
   FontDatabase::family_name_is_emoji_font(&font.family)
