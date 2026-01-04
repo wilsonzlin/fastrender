@@ -1,10 +1,14 @@
 mod r#ref;
 
 use r#ref::compare::{compare_images, load_png_from_bytes, CompareConfig};
+use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use tempfile::TempDir;
+
+const ENV_TIMEOUT_SECS: &str = "FASTR_DETERMINISM_TIMEOUT_SECS";
+const ENV_VIEWPORT: &str = "FASTR_DETERMINISM_VIEWPORT";
 
 fn manifest_dir() -> PathBuf {
   PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -14,8 +18,66 @@ fn artifacts_root() -> PathBuf {
   manifest_dir().join("target/determinism_diffs")
 }
 
-fn run_render_fixtures(fixtures: &[&str], out_dir: &Path) {
+fn parse_timeout_secs_from_env() -> u64 {
+  match env::var(ENV_TIMEOUT_SECS) {
+    Ok(value) => {
+      let trimmed = value.trim();
+      if trimmed.is_empty() {
+        panic!("{ENV_TIMEOUT_SECS} must not be empty");
+      }
+      let parsed: u64 = trimmed
+        .parse()
+        .unwrap_or_else(|e| panic!("invalid {ENV_TIMEOUT_SECS}={trimmed:?}: {e}"));
+      assert!(parsed > 0, "{ENV_TIMEOUT_SECS} must be > 0");
+      parsed
+    }
+    Err(env::VarError::NotPresent) => {
+      45
+    }
+    Err(e) => panic!("failed to read {ENV_TIMEOUT_SECS}: {e}"),
+  }
+}
+
+fn parse_viewport_str(value: &str) -> (u32, u32) {
+  let trimmed = value.trim();
+  let (w_str, h_str) = trimmed
+    .split_once('x')
+    .or_else(|| trimmed.split_once('X'))
+    .unwrap_or_else(|| panic!("viewport must be formatted as WxH (got {trimmed:?})"));
+
+  let w: u32 = w_str
+    .trim()
+    .parse()
+    .unwrap_or_else(|e| panic!("invalid viewport width {w_str:?}: {e}"));
+  let h: u32 = h_str
+    .trim()
+    .parse()
+    .unwrap_or_else(|e| panic!("invalid viewport height {h_str:?}: {e}"));
+
+  assert!(w > 0 && h > 0, "viewport must be non-zero (got {w}x{h})");
+  (w, h)
+}
+
+fn parse_viewport_arg_from_env() -> String {
+  match env::var(ENV_VIEWPORT) {
+    Ok(value) => {
+      let (w, h) = parse_viewport_str(&value);
+      format!("{w}x{h}")
+    }
+    Err(env::VarError::NotPresent) => {
+      if cfg!(windows) {
+        "600x480".to_string()
+      } else {
+        "600x600".to_string()
+      }
+    }
+    Err(e) => panic!("failed to read {ENV_VIEWPORT}: {e}"),
+  }
+}
+
+fn run_render_fixtures(fixtures: &[&str], out_dir: &Path, viewport: &str, timeout_secs: u64) {
   let fixtures_arg = fixtures.join(",");
+  let timeout_arg = timeout_secs.to_string();
   let status = Command::new(env!("CARGO_BIN_EXE_render_fixtures"))
     .current_dir(manifest_dir())
     .args([
@@ -26,16 +88,16 @@ fn run_render_fixtures(fixtures: &[&str], out_dir: &Path) {
       "--out-dir",
       out_dir.to_str().expect("out-dir utf8"),
       "--timeout",
-      "10",
+      &timeout_arg,
       "--viewport",
-      "600x600",
+      viewport,
     ])
     .status()
     .expect("spawn render_fixtures");
 
   assert!(
     status.success(),
-    "render_fixtures failed for fixtures [{fixtures_arg}] (out_dir={})",
+    "render_fixtures failed for fixtures [{fixtures_arg}] (viewport={viewport}, timeout={timeout_secs}s, out_dir={})",
     out_dir.display()
   );
 }
@@ -190,11 +252,14 @@ fn compare_fixture_png(stem: &str, run1_dir: &Path, run2_dir: &Path) {
 fn pages_fixture_process_determinism_test() {
   let fixtures = ["preserve_3d_stack", "filter_backdrop_scene"];
 
+  let viewport = parse_viewport_arg_from_env();
+  let timeout_secs = parse_timeout_secs_from_env();
+
   let run1 = TempDir::new().expect("tempdir run1");
   let run2 = TempDir::new().expect("tempdir run2");
 
-  run_render_fixtures(&fixtures, run1.path());
-  run_render_fixtures(&fixtures, run2.path());
+  run_render_fixtures(&fixtures, run1.path(), &viewport, timeout_secs);
+  run_render_fixtures(&fixtures, run2.path(), &viewport, timeout_secs);
 
   for stem in fixtures {
     compare_fixture_png(stem, run1.path(), run2.path());
