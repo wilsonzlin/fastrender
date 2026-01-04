@@ -135,6 +135,17 @@ FASTR_HTTP_BACKEND=reqwest FASTR_HTTP_BROWSER_HEADERS=1 \
     - `--max-discovered-assets-per-page`: safety valve for pathological pages (0 disables the cap).
 - Disk cache tuning flags (`--disk-cache-max-age-secs`, `--disk-cache-max-bytes`, `--disk-cache-lock-stale-secs`, or the corresponding `FASTR_DISK_CACHE_*` env vars) match the pageset render binaries.
 
+## `disk_cache_audit`
+
+- Purpose: audit (and optionally clean) the disk-backed subresource cache directory (defaults to `fetches/assets/`) for common pageset poisoning cases such as cached 4xx/5xx responses or HTML responses stored for URLs that look like static subresources (CSS/images/fonts).
+- Entry: `src/bin/disk_cache_audit.rs`
+- Run: `cargo run --release --bin disk_cache_audit -- --help`
+- Typical usage:
+  - Audit: `cargo run --release --bin disk_cache_audit --`
+  - JSON output (stable keys): `cargo run --release --bin disk_cache_audit -- --json`
+  - Cleanup: `cargo run --release --bin disk_cache_audit -- --delete-http-errors --delete-html-subresources`
+  - Match non-default cache directory: `cargo run --release --bin disk_cache_audit -- --cache-dir <dir>`
+
 ## `render_pages`
 
 - Purpose: render all cached HTML in `fetches/html/` to `fetches/renders/` (PNG + per-page logs + `_summary.log`).
