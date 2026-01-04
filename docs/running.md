@@ -12,6 +12,8 @@ Use the `xtask` wrapper for common local loops:
 - Render a page: `cargo xtask render-page --url https://example.com --output out.png`
 - Diff renders: `cargo xtask diff-renders --before fetches/renders/baseline --after fetches/renders/new`
 - Deterministic fixture-vs-Chrome evidence report (offline): `cargo xtask fixture-chrome-diff`
+- Recapture offline page fixtures from a manifest (pageset guardrails by default): `cargo xtask recapture-page-fixtures`
+- Validate that offline page fixtures do not reference network resources: `cargo xtask validate-page-fixtures`
 - Cached-pages Chrome-vs-FastRender evidence report (best-effort): `scripts/chrome_vs_fastrender.sh --pages example.com`
 
 `cargo xtask --help` and per-subcommand help describe available flags and defaults.

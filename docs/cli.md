@@ -94,6 +94,8 @@ FASTR_HTTP_BACKEND=reqwest FASTR_HTTP_BROWSER_HEADERS=1 \
 - Chrome-vs-FastRender diff report for offline fixtures (deterministic; offline): `cargo xtask fixture-chrome-diff`
 - Import a bundled capture into a `pages_regression` fixture: `cargo xtask import-page-fixture <bundle_dir|.tar> <fixture_name> [--output-root tests/pages/fixtures --overwrite --dry-run]`
   - Relative `<bundle>` and `--output-root` paths are resolved relative to the repository root so the command behaves consistently even when invoked from subdirectories (pass absolute paths to override).
+- Recapture and (re)import offline page fixtures from a manifest (pageset guardrails by default): `cargo xtask recapture-page-fixtures [--capture-mode cache|crawl|render] [--only stripe.com] [--overwrite]`
+- Validate that offline page fixtures do not reference network resources: `cargo xtask validate-page-fixtures [--only stripe.com]`
 - Update `tests/pages/pageset_guardrails.json` from the pageset scoreboard: `cargo xtask update-pageset-guardrails`
   - Defaults to `--strategy coverage`; always includes every `timeout`/`panic`/`error` page from `progress/pages/*.json` for offline triage, then adds a small set of slow `ok` pages for hotspot coverage.
   - Warns when failures exceed `--count`.
@@ -306,6 +308,36 @@ cargo run --release --bin diff_renders -- \
   - Render params: `--viewport <WxH>`, `--dpr <float>`, `--timeout <secs>`
   - Diff params: `--tolerance <u8>`, `--max-diff-percent <float>`
   - Chrome: `--chrome <path>`, `--chrome-dir <dir>`, `--no-chrome`
+
+## `cargo xtask recapture-page-fixtures`
+
+- Purpose: (re)capture and (re)import offline page fixtures from a manifest (defaults to `tests/pages/pageset_guardrails.json`) using `bundle_page` + `cargo xtask import-page-fixture`.
+- Typical usage:
+  - Recapture all fixtures from the manifest (crawl mode; fetch HTML/CSS and discover subresources without rendering): `cargo xtask recapture-page-fixtures`
+  - Only recapture a subset: `cargo xtask recapture-page-fixtures --only stripe.com,dropbox.com`
+  - Replace existing fixtures (dangerous): `cargo xtask recapture-page-fixtures --overwrite`
+  - Cache-only capture (offline; requires a warmed disk cache): `cargo xtask recapture-page-fixtures --capture-mode cache --asset-cache-dir fetches/assets`
+- Manifest fields:
+  - `name` (required): fixture directory name under `tests/pages/fixtures/`
+  - `url` (optional; preferred): source URL to capture (used for `render`/`crawl` modes)
+  - `viewport` (optional; defaults to 1200x800) and `dpr` (optional; defaults to 1.0)
+  - When `url` is absent, the command falls back to `progress/pages/<name>.json` and reads its `url` field.
+- Capture modes (`--capture-mode`):
+  - `crawl` (default): `bundle_page fetch --no-render ...` (fast; avoids renderer crashes/timeouts)
+  - `render`: `bundle_page fetch ...` (more complete discovery when needed)
+  - `cache`: `bundle_page cache <stem> ...` (offline; requires the disk-backed cache and matching request headers)
+- Related: run `cargo xtask validate-page-fixtures` afterwards to ensure imports stayed fully offline.
+
+## `cargo xtask validate-page-fixtures`
+
+- Purpose: ensure offline page fixtures under `tests/pages/fixtures/` do not contain fetchable network URLs (`http://`, `https://`, or `//`) in HTML/CSS/SVG.
+- Run: `cargo xtask validate-page-fixtures`
+- Useful after:
+  - importing fixtures via `cargo xtask import-page-fixture`
+  - recapturing fixtures via `cargo xtask recapture-page-fixtures`
+- Core flags:
+  - Fixtures root: `--fixtures-root <dir>` (default `tests/pages/fixtures`)
+  - Selection: `--only <csv>` (comma-separated fixture names)
 
 ## `fetch_and_render`
 
