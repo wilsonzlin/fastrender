@@ -364,7 +364,9 @@ fn nested_shadow_root_slots_do_not_capture_outer_light_dom() {
   build_id_lookup(&dom, &ids, &mut lookup);
 
   let outer_slot = find_by_id(&dom, "outer-slot").expect("outer slot");
-  let outer_slot_id = *ids.get(&(outer_slot as *const DomNode)).expect("outer slot id");
+  let outer_slot_id = *ids
+    .get(&(outer_slot as *const DomNode))
+    .expect("outer slot id");
   let outer_assigned = assignments
     .slot_to_nodes
     .get(&outer_slot_id)
@@ -396,7 +398,9 @@ fn nested_shadow_root_slots_do_not_capture_outer_light_dom() {
   );
 
   let inner_slot = find_by_id(&dom, "inner-slot").expect("inner slot");
-  let inner_slot_id = *ids.get(&(inner_slot as *const DomNode)).expect("inner slot id");
+  let inner_slot_id = *ids
+    .get(&(inner_slot as *const DomNode))
+    .expect("inner slot id");
   assert!(
     !assignments.slot_to_nodes.contains_key(&inner_slot_id),
     "slots inside nested shadow roots should not be assigned by outer host distribution"
@@ -467,7 +471,9 @@ fn slots_inside_inert_template_are_ignored_for_assignment() {
   build_id_lookup(&dom, &ids, &mut lookup);
 
   let real_slot = find_by_id(&dom, "real-slot").expect("real slot");
-  let real_slot_id = *ids.get(&(real_slot as *const DomNode)).expect("real slot id");
+  let real_slot_id = *ids
+    .get(&(real_slot as *const DomNode))
+    .expect("real slot id");
   let real_assigned = assignments
     .slot_to_nodes
     .get(&real_slot_id)
