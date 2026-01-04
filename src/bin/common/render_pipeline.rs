@@ -6,7 +6,7 @@ use fastrender::api::{
   RenderReport, RenderResult, ResourceKind,
 };
 use fastrender::compat::CompatProfile;
-use fastrender::css::loader::{infer_document_url_guess, resolve_href};
+use fastrender::css::loader::{infer_base_url, resolve_href};
 use fastrender::dom::DomCompatibilityMode;
 use fastrender::html::encoding::decode_html_bytes;
 use fastrender::html::meta_refresh::{extract_js_location_redirect, extract_meta_refresh_url};
@@ -255,15 +255,7 @@ pub struct PreparedDocument {
 }
 
 fn derive_base_url(html: &str, base_hint: &str) -> String {
-  let mut base_url = infer_document_url_guess(html, base_hint).into_owned();
-  if let Ok(dom) = fastrender::dom::parse_html(html) {
-    if let Some(base_href) = fastrender::html::find_base_href(&dom) {
-      if let Some(resolved) = resolve_href(&base_url, &base_href) {
-        base_url = resolved;
-      }
-    }
-  }
-  base_url
+  infer_base_url(html, base_hint).into_owned()
 }
 
 impl PreparedDocument {

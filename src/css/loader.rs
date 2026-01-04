@@ -7,6 +7,7 @@
 
 use crate::css::parser::{rel_list_contains_stylesheet, tokenize_rel_list};
 use crate::debug::runtime;
+use crate::dom::{DomNode, DomNodeType};
 use crate::error::{RenderError, RenderStage, Result};
 use crate::render_control::{check_active, check_active_periodic, RenderDeadline};
 use cssparser::{Parser, ParserInput, Token};
@@ -2020,8 +2021,22 @@ fn find_tag_case_insensitive_from(
 /// shadow DOM templates) cannot poison the result.
 pub fn infer_document_url_guess<'a>(html: &'a str, input_url: &'a str) -> Cow<'a, str> {
   // Canonicalize file:// inputs so relative cached paths become absolute.
+  let input = canonicalize_file_input_url(input_url);
+  if !is_file_url(input.as_ref()) {
+    return input;
+  }
+
+  // For cached file inputs, prefer an explicit canonical URL in the metadata so subsequent URL
+  // resolution (including `<base href>`) uses the original site instead of the local filesystem.
+  let Ok(dom) = crate::dom::parse_html(html) else {
+    return infer_document_url_guess_without_dom(input);
+  };
+
+  infer_document_url_guess_from_dom_with_input(&dom, input)
+}
+
+fn canonicalize_file_input_url<'a>(input_url: &'a str) -> Cow<'a, str> {
   let mut input = Cow::Borrowed(input_url);
-  let mut is_file_input = false;
   if input_url.starts_with("file://") && !input_url.starts_with("file:///") {
     // file://relative/path.html
     let rel = &input_url["file://".len()..];
@@ -2037,86 +2052,177 @@ pub fn infer_document_url_guess<'a>(html: &'a str, input_url: &'a str) -> Cow<'a
       }
     }
   }
-
-  if let Ok(url) = Url::parse(&input) {
-    is_file_input = url.scheme() == "file";
-  }
-
-  enum BaseUrlHintFilter {
-    RelCanonical,
-    PropertyOgUrl,
-  }
-
-  // For cached file inputs, prefer an explicit canonical URL in the metadata so subsequent URL
-  // resolution (including `<base href>`) uses the original site instead of the local filesystem.
-  for (tag, attr, filter) in [
-    ("link", "href", BaseUrlHintFilter::RelCanonical),
-    ("meta", "content", BaseUrlHintFilter::PropertyOgUrl),
-  ] {
-    if !is_file_input {
-      continue;
-    }
-    let mut pos = 0;
-    while let Some(start) = find_tag_case_insensitive_from(html, tag, false, pos) {
-      let Some(end) = html[start..].find('>') else {
-        break;
-      };
-      let tag_slice = &html[start..=start + end];
-
-      let matches_filter = match filter {
-        BaseUrlHintFilter::RelCanonical => extract_attr_value(tag_slice, "rel").is_some_and(|rel| {
-          rel
-            .split_whitespace()
-            .any(|token| token.eq_ignore_ascii_case("canonical"))
-        }),
-        BaseUrlHintFilter::PropertyOgUrl => extract_attr_value(tag_slice, "property")
-          .is_some_and(|prop| prop.eq_ignore_ascii_case("og:url")),
-      };
-
-      if matches_filter {
-        if let Some(val) = extract_attr_value(tag_slice, attr) {
-          if let Some(resolved) = resolve_href(&input, &val) {
-            if resolved.starts_with("http://") || resolved.starts_with("https://") {
-              return Cow::Owned(resolved);
-            }
-          }
-        }
-      }
-      pos = start + end + 1;
-    }
-  }
-
-  if let Ok(url) = Url::parse(&input) {
-    if url.scheme() == "file" {
-      if let Some(seg) = url.path_segments().and_then(|mut s| s.next_back()) {
-        if let Some(host) = seg.strip_suffix(".html") {
-          // Heuristic: cached pages typically use a `{host}.html` filename. Avoid applying this
-          // to local files like `page.html` by requiring the host portion to look like a domain.
-          if host.contains('.') {
-            let guess = format!("https://{host}/");
-            if Url::parse(&guess).is_ok() {
-              return Cow::Owned(guess);
-            }
-          }
-        }
-      }
-    }
-  }
-
   input
+}
+
+fn is_file_url(url: &str) -> bool {
+  Url::parse(url)
+    .ok()
+    .is_some_and(|url| url.scheme() == "file")
+}
+
+fn infer_http_base_from_file_url(doc_url: &str) -> Option<String> {
+  let Ok(url) = Url::parse(doc_url) else {
+    return None;
+  };
+  if url.scheme() != "file" {
+    return None;
+  }
+  let Some(seg) = url.path_segments().and_then(|mut s| s.next_back()) else {
+    return None;
+  };
+  let Some(host) = seg.strip_suffix(".html") else {
+    return None;
+  };
+  // Heuristic: cached pages typically use a `{host}.html` filename. Avoid applying this
+  // to local files like `page.html` by requiring the host portion to look like a domain.
+  if !host.contains('.') {
+    return None;
+  }
+  let guess = format!("https://{host}/");
+  Url::parse(&guess).ok().map(|url| url.to_string())
+}
+
+fn infer_document_url_guess_without_dom<'a>(input: Cow<'a, str>) -> Cow<'a, str> {
+  if is_file_url(input.as_ref()) {
+    if let Some(guess) = infer_http_base_from_file_url(input.as_ref()) {
+      return Cow::Owned(guess);
+    }
+  }
+  input
+}
+
+/// Infer a reasonable document URL given a parsed DOM and an input URL.
+///
+/// For non-file inputs, this returns the input URL unchanged.
+/// For `file://` cached pages, this attempts to recover the original http(s) URL using:
+/// - `<link rel="canonical" href="...">`
+/// - `<meta property="og:url" content="...">`
+/// - a `{host}.html` filename heuristic.
+///
+/// Like `<base href>` handling, DOM traversal skips inert `<template>` contents and declarative
+/// shadow roots so base hints cannot be extracted from script/template text.
+pub fn infer_document_url_guess_from_dom<'a>(dom: &DomNode, input_url: &'a str) -> Cow<'a, str> {
+  let input = canonicalize_file_input_url(input_url);
+  if !is_file_url(input.as_ref()) {
+    return input;
+  }
+  infer_document_url_guess_from_dom_with_input(dom, input)
+}
+
+fn infer_document_url_guess_from_dom_with_input<'a>(dom: &DomNode, input: Cow<'a, str>) -> Cow<'a, str> {
+  if !is_file_url(input.as_ref()) {
+    return input;
+  }
+
+  fn find_head<'a>(node: &'a DomNode) -> Option<&'a DomNode> {
+    if matches!(node.node_type, DomNodeType::ShadowRoot { .. }) {
+      return None;
+    }
+    if node.is_template_element() {
+      return None;
+    }
+    if let Some(tag) = node.tag_name() {
+      if tag.eq_ignore_ascii_case("head") {
+        return Some(node);
+      }
+    }
+    for child in node.traversal_children() {
+      if let Some(found) = find_head(child) {
+        return Some(found);
+      }
+    }
+    None
+  }
+
+  fn find_first_http_canonical(node: &DomNode, base_url: &str) -> Option<String> {
+    if matches!(node.node_type, DomNodeType::ShadowRoot { .. }) {
+      return None;
+    }
+    if node.is_template_element() {
+      return None;
+    }
+    if node.tag_name().is_some_and(|tag| tag.eq_ignore_ascii_case("link")) {
+      if let Some(rel) = node.get_attribute_ref("rel") {
+        if rel
+          .split_whitespace()
+          .any(|token| token.eq_ignore_ascii_case("canonical"))
+        {
+          if let Some(href) = node.get_attribute_ref("href") {
+            let trimmed = href.trim();
+            if !trimmed.is_empty() {
+              if let Some(resolved) = resolve_href(base_url, trimmed) {
+                if resolved.starts_with("http://") || resolved.starts_with("https://") {
+                  return Some(resolved);
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+    for child in node.traversal_children() {
+      if let Some(found) = find_first_http_canonical(child, base_url) {
+        return Some(found);
+      }
+    }
+    None
+  }
+
+  fn find_first_http_og_url(node: &DomNode, base_url: &str) -> Option<String> {
+    if matches!(node.node_type, DomNodeType::ShadowRoot { .. }) {
+      return None;
+    }
+    if node.is_template_element() {
+      return None;
+    }
+    if node.tag_name().is_some_and(|tag| tag.eq_ignore_ascii_case("meta")) {
+      if node
+        .get_attribute_ref("property")
+        .is_some_and(|prop| prop.eq_ignore_ascii_case("og:url"))
+      {
+        if let Some(content) = node.get_attribute_ref("content") {
+          let trimmed = content.trim();
+          if !trimmed.is_empty() {
+            if let Some(resolved) = resolve_href(base_url, trimmed) {
+              if resolved.starts_with("http://") || resolved.starts_with("https://") {
+                return Some(resolved);
+              }
+            }
+          }
+        }
+      }
+    }
+    for child in node.traversal_children() {
+      if let Some(found) = find_first_http_og_url(child, base_url) {
+        return Some(found);
+      }
+    }
+    None
+  }
+
+  let scope = find_head(dom).unwrap_or(dom);
+  if let Some(canonical) = find_first_http_canonical(scope, input.as_ref()) {
+    return Cow::Owned(canonical);
+  }
+  if let Some(og_url) = find_first_http_og_url(scope, input.as_ref()) {
+    return Cow::Owned(og_url);
+  }
+  infer_document_url_guess_without_dom(input)
 }
 
 /// Infer a reasonable base URL for the document.
 ///
-/// This computes the best-effort document URL first (see [`infer_document_url_guess`]), then
-/// parses the HTML and resolves the first valid `<base href>` against that document URL. This
-/// avoids base URL poisoning from string scanning (e.g., `<base>` inside `<template>` or
-/// declarative shadow DOM templates).
+/// This parses the HTML, infers a best-effort document URL (see [`infer_document_url_guess`]), and
+/// resolves the first valid `<base href>` against that document URL. This avoids base URL
+/// poisoning from string scanning (e.g., `<base>` inside `<template>` or declarative shadow DOM
+/// templates).
 pub fn infer_base_url<'a>(html: &'a str, input_url: &'a str) -> Cow<'a, str> {
-  let document_url_guess = infer_document_url_guess(html, input_url);
+  let input = canonicalize_file_input_url(input_url);
   let Ok(dom) = crate::dom::parse_html(html) else {
-    return document_url_guess;
+    return infer_document_url_guess_without_dom(input);
   };
+  let document_url_guess = infer_document_url_guess_from_dom_with_input(&dom, input);
   if let Some(base_href) = crate::html::find_base_href(&dom) {
     if let Some(resolved) = resolve_href(document_url_guess.as_ref(), &base_href) {
       return Cow::Owned(resolved);
@@ -2946,6 +3052,30 @@ mod tests {
         "#;
     let base = infer_base_url(html, "file:///tmp/cache/example.org.unquoted.html");
     assert_eq!(base, "https://example.org/unquoted-og/");
+  }
+
+  #[test]
+  fn infer_base_url_ignores_canonical_like_text_in_scripts_for_file_inputs() {
+    let html = r#"
+            <head>
+              <script>var s = '<link rel="canonical" href="https://bad.example/poison/">';</script>
+              <link rel="canonical" href="https://good.example/app/">
+            </head>
+        "#;
+    let base = infer_base_url(html, "file:///tmp/cache/example.html").into_owned();
+    assert_eq!(base, "https://good.example/app/");
+  }
+
+  #[test]
+  fn infer_base_url_ignores_og_url_like_text_in_scripts_for_file_inputs() {
+    let html = r#"
+            <head>
+              <script>var s = '<meta property="og:url" content="https://bad.example/poison/">';</script>
+              <meta property="og:url" content="https://good.example/app/">
+            </head>
+        "#;
+    let base = infer_base_url(html, "file:///tmp/cache/example.html").into_owned();
+    assert_eq!(base, "https://good.example/app/");
   }
 
   #[test]
