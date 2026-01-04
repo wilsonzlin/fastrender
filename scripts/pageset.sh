@@ -145,6 +145,10 @@ detect_total_cpus() {
 # Wrapper flags (accepted even if placed after `--`):
 #   --jobs/-j N --fetch-timeout SECS --render-timeout SECS --cache-dir DIR --no-fetch
 #   --disk-cache --no-disk-cache
+#   --capture-missing-failure-fixtures
+#   --capture-missing-failure-fixtures-out-dir DIR
+#   --capture-missing-failure-fixtures-allow-missing-resources
+#   --capture-missing-failure-fixtures-overwrite
 #
 # Extra arguments are forwarded to `pageset_progress run`. Use `--` to separate them from the
 # wrapper flags, e.g.:
@@ -179,6 +183,10 @@ RENDER_TIMEOUT="${RENDER_TIMEOUT:-5}"
 USE_DISK_CACHE="${DISK_CACHE:-1}"
 CACHE_DIR="fetches/assets"
 NO_FETCH=0
+CAPTURE_MISSING_FAILURE_FIXTURES=0
+CAPTURE_MISSING_FAILURE_FIXTURES_OUT_DIR="target/pageset_failure_fixture_bundles"
+CAPTURE_MISSING_FAILURE_FIXTURES_ALLOW_MISSING_RESOURCES=0
+CAPTURE_MISSING_FAILURE_FIXTURES_OVERWRITE=0
 
 if [[ -n "${NO_DISK_CACHE:-}" ]]; then
   USE_DISK_CACHE=0
@@ -268,6 +276,35 @@ while [[ $# -gt 0 ]]; do
       ;;
     --cache-dir=*)
       CACHE_DIR="${arg#--cache-dir=}"
+      shift
+      continue
+      ;;
+    --capture-missing-failure-fixtures)
+      CAPTURE_MISSING_FAILURE_FIXTURES=1
+      shift
+      continue
+      ;;
+    --capture-missing-failure-fixtures-out-dir)
+      if [[ $# -lt 2 || "$2" == -* ]]; then
+        echo "${arg} requires a value" >&2
+        exit 2
+      fi
+      CAPTURE_MISSING_FAILURE_FIXTURES_OUT_DIR="$2"
+      shift 2
+      continue
+      ;;
+    --capture-missing-failure-fixtures-out-dir=*)
+      CAPTURE_MISSING_FAILURE_FIXTURES_OUT_DIR="${arg#--capture-missing-failure-fixtures-out-dir=}"
+      shift
+      continue
+      ;;
+    --capture-missing-failure-fixtures-allow-missing-resources)
+      CAPTURE_MISSING_FAILURE_FIXTURES_ALLOW_MISSING_RESOURCES=1
+      shift
+      continue
+      ;;
+    --capture-missing-failure-fixtures-overwrite)
+      CAPTURE_MISSING_FAILURE_FIXTURES_OVERWRITE=1
       shift
       continue
       ;;
@@ -772,3 +809,132 @@ fi
 
 echo "Updating progress/pages (jobs=${JOBS}, hard timeout=${RENDER_TIMEOUT}s, disk_cache=${USE_DISK_CACHE}, cache_dir=${CACHE_DIR}, rayon_threads=${RAYON_NUM_THREADS}, layout_parallel=${FASTR_LAYOUT_PARALLEL})..."
 cargo run --release "${FEATURE_ARGS[@]}" --bin pageset_progress -- run --jobs "${JOBS}" --timeout "${RENDER_TIMEOUT}" --bundled-fonts --cache-dir "${CACHE_DIR}" "${PAGESET_KNOB_ARGS[@]}" "${PAGESET_ARGS[@]}" "${EXTRA_DISK_CACHE_ARGS[@]}"
+
+if [[ "${CAPTURE_MISSING_FAILURE_FIXTURES}" -eq 1 ]]; then
+  if [[ "${USE_DISK_CACHE}" == 0 ]]; then
+    echo "Warning: --capture-missing-failure-fixtures requested, but the pageset disk cache is disabled. Skipping because bundle_page cache requires cached subresources." >&2
+    exit 0
+  fi
+
+  echo ""
+  echo "Capturing missing failure fixtures from warmed disk cache..."
+
+  if ! [[ -d "progress/pages" ]]; then
+    echo "progress/pages directory is missing; run pageset first" >&2
+    exit 1
+  fi
+
+  mkdir -p "${CAPTURE_MISSING_FAILURE_FIXTURES_OUT_DIR}"
+
+  failing_pages_total=0
+  fixtures_already_present=0
+  bundles_captured=0
+  fixtures_imported=0
+  failures=()
+
+  if command -v python3 >/dev/null 2>&1; then
+    mapfile -t failing_lines < <(
+      python3 - <<'PY'
+import glob
+import json
+import os
+
+for path in sorted(glob.glob("progress/pages/*.json")):
+  stem = os.path.splitext(os.path.basename(path))[0]
+  try:
+    with open(path, "r", encoding="utf-8") as f:
+      data = json.load(f)
+  except Exception:
+    continue
+  status = data.get("status", "ok")
+  if status != "ok":
+    print(f"{stem}\t{status}")
+PY
+    )
+  else
+    # Best-effort fallback: parse the status string with grep/sed.
+    failing_lines=()
+    while IFS= read -r path; do
+      stem="$(basename "${path}")"
+      stem="${stem%.json}"
+      status="$(grep -Eo '"status"[[:space:]]*:[[:space:]]*"[^"]+"' "${path}" | head -n 1 | sed -E 's/.*"status"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/')"
+      if [[ -z "${status}" ]]; then
+        status="ok"
+      fi
+      if [[ "${status}" != "ok" ]]; then
+        failing_lines+=("${stem}"$'\t'"${status}")
+      fi
+    done < <(ls progress/pages/*.json 2>/dev/null || true)
+  fi
+
+  failing_pages_total="${#failing_lines[@]}"
+  echo "Failing pages discovered: ${failing_pages_total}"
+
+  for line in "${failing_lines[@]}"; do
+    IFS=$'\t' read -r stem status <<<"${line}"
+    fixture_index="tests/pages/fixtures/${stem}/index.html"
+    if [[ -f "${fixture_index}" ]]; then
+      fixtures_already_present=$((fixtures_already_present + 1))
+      continue
+    fi
+
+    bundle_path="${CAPTURE_MISSING_FAILURE_FIXTURES_OUT_DIR}/${stem}.tar"
+    rm -rf "${bundle_path}"
+
+    echo "Capturing ${stem} (status=${status})..."
+
+    bundle_cmd=(cargo run --release --features disk_cache --bin bundle_page -- cache "${stem}" --out "${bundle_path}" --asset-cache-dir "${CACHE_DIR}")
+    if [[ "${CAPTURE_MISSING_FAILURE_FIXTURES_ALLOW_MISSING_RESOURCES}" -eq 1 ]]; then
+      bundle_cmd+=(--allow-missing)
+    fi
+    if [[ -n "${USER_AGENT_ARG}" ]]; then
+      bundle_cmd+=(--user-agent "${USER_AGENT_ARG}")
+    fi
+    if [[ -n "${ACCEPT_LANGUAGE_ARG}" ]]; then
+      bundle_cmd+=(--accept-language "${ACCEPT_LANGUAGE_ARG}")
+    fi
+    if [[ -n "${VIEWPORT_ARG}" ]]; then
+      bundle_cmd+=(--viewport "${VIEWPORT_ARG}")
+    fi
+    if [[ -n "${DPR_ARG}" ]]; then
+      bundle_cmd+=(--dpr "${DPR_ARG}")
+    fi
+
+    if ! "${bundle_cmd[@]}"; then
+      failures+=("${stem}: capture failed")
+      continue
+    fi
+    bundles_captured=$((bundles_captured + 1))
+
+    import_cmd=(cargo xtask import-page-fixture "${bundle_path}" "${stem}" --output-root tests/pages/fixtures)
+    if [[ "${CAPTURE_MISSING_FAILURE_FIXTURES_OVERWRITE}" -eq 1 ]]; then
+      import_cmd+=(--overwrite)
+    fi
+    if [[ "${CAPTURE_MISSING_FAILURE_FIXTURES_ALLOW_MISSING_RESOURCES}" -eq 1 ]]; then
+      import_cmd+=(--allow-missing)
+    fi
+
+    if ! "${import_cmd[@]}"; then
+      failures+=("${stem}: import failed")
+      continue
+    fi
+    fixtures_imported=$((fixtures_imported + 1))
+  done
+
+  echo ""
+  echo "capture-missing-failure-fixtures summary:"
+  echo "  failing pages discovered   ${failing_pages_total}"
+  echo "  fixtures already present   ${fixtures_already_present}"
+  echo "  bundles captured           ${bundles_captured}"
+  echo "  fixtures imported          ${fixtures_imported}"
+  echo "  failures                   ${#failures[@]}"
+
+  if [[ "${#failures[@]}" -ne 0 ]]; then
+    echo ""
+    echo "Failures:"
+    for failure in "${failures[@]}"; do
+      echo "  - ${failure}"
+    done
+    exit 1
+  fi
+fi
