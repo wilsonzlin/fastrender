@@ -2,7 +2,7 @@ use fastrender::error::{Error, RenderError, RenderStage};
 use fastrender::paint::clip_path::ResolvedClipPath;
 use fastrender::paint::display_list::{
   BlendMode, BoxShadowItem, ClipItem, ClipShape, DisplayItem, DisplayList, FillRectItem,
-  ImageData, MaskReferenceRects, ResolvedFilter, ResolvedMask, ResolvedMaskImage, ResolvedMaskLayer,
+  ImageData, MaskReferenceRects, ResolvedMask, ResolvedMaskImage, ResolvedMaskLayer,
   StackingContextItem, StrokeRectItem, StrokeRoundedRectItem, Transform3D, TransformItem,
 };
 use fastrender::paint::display_list_renderer::{DisplayListRenderer, PaintParallelism};
@@ -374,40 +374,66 @@ fn mask_layers_survive_tiling() {
 }
 
 #[test]
-fn backdrop_filters_trigger_serial_fallback() {
+fn preserve_3d_stacking_contexts_trigger_serial_fallback() {
   let mut list = DisplayList::new();
-  let stacking = StackingContextItem {
+  list.push(DisplayItem::FillRect(FillRectItem {
+    rect: Rect::from_xywh(0.0, 0.0, 256.0, 256.0),
+    color: Rgba::WHITE,
+  }));
+
+  let root_bounds = Rect::from_xywh(0.0, 0.0, 256.0, 256.0);
+  let root = StackingContextItem {
     z_index: 0,
     creates_stacking_context: true,
-    bounds: Rect::from_xywh(0.0, 0.0, 80.0, 80.0),
-    plane_rect: Rect::from_xywh(0.0, 0.0, 80.0, 80.0),
+    bounds: root_bounds,
+    plane_rect: root_bounds,
     mix_blend_mode: BlendMode::Normal,
     is_isolated: false,
     transform: None,
     child_perspective: None,
-    transform_style: TransformStyle::Flat,
+    transform_style: TransformStyle::Preserve3d,
     backface_visibility: BackfaceVisibility::Visible,
     filters: Vec::new(),
-    backdrop_filters: vec![ResolvedFilter::Blur(3.0)],
+    backdrop_filters: Vec::new(),
     radii: BorderRadii::ZERO,
     mask: None,
   };
-  list.push(DisplayItem::PushStackingContext(stacking));
+  list.push(DisplayItem::PushStackingContext(root));
+
+  let plane_bounds = Rect::from_xywh(48.0, 48.0, 64.0, 64.0);
+  let plane = StackingContextItem {
+    z_index: 0,
+    creates_stacking_context: true,
+    bounds: plane_bounds,
+    plane_rect: plane_bounds,
+    mix_blend_mode: BlendMode::Normal,
+    is_isolated: false,
+    transform: Some(Transform3D::translate(0.0, 0.0, 20.0)),
+    child_perspective: None,
+    transform_style: TransformStyle::Flat,
+    backface_visibility: BackfaceVisibility::Visible,
+    filters: Vec::new(),
+    backdrop_filters: Vec::new(),
+    radii: BorderRadii::ZERO,
+    mask: None,
+  };
+  list.push(DisplayItem::PushStackingContext(plane));
   list.push(DisplayItem::FillRect(FillRectItem {
-    rect: Rect::from_xywh(8.0, 8.0, 40.0, 40.0),
-    color: Rgba::new(0, 200, 120, 0.8),
+    rect: plane_bounds,
+    color: Rgba::new(200, 60, 120, 1.0),
   }));
+  list.push(DisplayItem::PopStackingContext);
   list.push(DisplayItem::PopStackingContext);
 
   let font_ctx = FontContext::new();
-  let serial = DisplayListRenderer::new(96, 96, Rgba::WHITE, font_ctx.clone())
+  let serial = DisplayListRenderer::new(256, 256, Rgba::WHITE, font_ctx.clone())
     .unwrap()
     .with_parallelism(PaintParallelism::disabled())
     .render(&list)
     .expect("serial paint");
 
   let parallelism = PaintParallelism {
-    tile_size: 24,
+    tile_size: 64,
     log_timing: false,
     min_display_items: 1,
     min_tiles: 1,
@@ -417,16 +443,21 @@ fn backdrop_filters_trigger_serial_fallback() {
   };
   let pool = ThreadPoolBuilder::new().num_threads(4).build().unwrap();
   let report = pool.install(|| {
-    DisplayListRenderer::new(96, 96, Rgba::WHITE, font_ctx)
+    DisplayListRenderer::new(256, 256, Rgba::WHITE, font_ctx)
       .unwrap()
       .with_parallelism(parallelism)
       .render_with_report(&list)
-      .expect("parallel paint")
+      .expect("paint")
   });
 
   assert!(
     !report.parallel_used,
-    "backdrop filters should disable parallel painting"
+    "preserve-3d should disable parallel painting"
+  );
+  let reason = report.fallback_reason.as_deref().unwrap_or_default();
+  assert!(
+    reason.contains("preserve"),
+    "expected preserve-3d fallback reason, got {reason:?}"
   );
   assert_eq!(serial.data(), report.pixmap.data());
 }

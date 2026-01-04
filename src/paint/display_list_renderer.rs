@@ -5422,6 +5422,11 @@ impl DisplayListRenderer {
     for item in items {
       check_active_periodic(&mut deadline_counter, DEADLINE_STRIDE, RenderStage::Paint)?;
       if let DisplayItem::PushStackingContext(sc) = item {
+        if !self.preserve_3d_disabled && matches!(sc.transform_style, TransformStyle::Preserve3d) {
+          *fallback_reason =
+            Some("preserve-3d stacking contexts require serial painting".to_string());
+          return Ok(true);
+        }
         if !matches!(sc.mix_blend_mode, BlendMode::Normal) && !sc.is_isolated {
           *fallback_reason =
             Some("mix-blend-mode on non-isolated context requires serial painting".to_string());
