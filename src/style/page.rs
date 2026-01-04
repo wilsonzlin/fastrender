@@ -1,6 +1,6 @@
 //! Page rule resolution and page box sizing utilities.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use crate::css::types::PropertyValue;
 use crate::css::types::{CollectedPageRule, PageMarginArea, PagePseudoClass, PageSelector};
@@ -70,7 +70,7 @@ pub struct ResolvedPageStyle {
   pub margin_left: f32,
   pub bleed: f32,
   pub trim: f32,
-  pub margin_boxes: HashMap<PageMarginArea, ComputedStyle>,
+  pub margin_boxes: BTreeMap<PageMarginArea, ComputedStyle>,
   pub page_style: ComputedStyle,
 }
 
@@ -92,7 +92,7 @@ pub fn resolve_page_style(
     .map(|s| s.root_font_size)
     .unwrap_or(root_font_size);
   let mut props = PageProperties::default();
-  let mut margin_styles: HashMap<PageMarginArea, ComputedStyle> = HashMap::new();
+  let mut margin_styles: BTreeMap<PageMarginArea, ComputedStyle> = BTreeMap::new();
   let mut page_style = default_page_style(root_font_size);
 
   let mut matching: Vec<(&CollectedPageRule<'_>, u8)> = Vec::new();
@@ -669,4 +669,56 @@ fn mm_to_px(mm: f32) -> f32 {
 
 fn in_to_px(inches: f32) -> f32 {
   inches * 96.0
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use std::collections::BTreeMap;
+
+  #[test]
+  fn margin_box_styles_iterate_in_enum_order() {
+    let canonical = vec![
+      PageMarginArea::TopLeftCorner,
+      PageMarginArea::TopLeft,
+      PageMarginArea::TopCenter,
+      PageMarginArea::TopRight,
+      PageMarginArea::TopRightCorner,
+      PageMarginArea::RightTop,
+      PageMarginArea::RightMiddle,
+      PageMarginArea::RightBottom,
+      PageMarginArea::BottomRightCorner,
+      PageMarginArea::BottomRight,
+      PageMarginArea::BottomCenter,
+      PageMarginArea::BottomLeft,
+      PageMarginArea::BottomLeftCorner,
+      PageMarginArea::LeftBottom,
+      PageMarginArea::LeftMiddle,
+      PageMarginArea::LeftTop,
+    ];
+
+    // Insert in reverse order to ensure the iteration order comes from the map's key ordering.
+    let mut margin_boxes: BTreeMap<PageMarginArea, ComputedStyle> = BTreeMap::new();
+    for area in canonical.iter().rev() {
+      margin_boxes.insert(*area, ComputedStyle::default());
+    }
+
+    let style = ResolvedPageStyle {
+      page_size: Size::new(0.0, 0.0),
+      total_size: Size::new(0.0, 0.0),
+      content_size: Size::new(0.0, 0.0),
+      content_origin: Point::new(0.0, 0.0),
+      margin_top: 0.0,
+      margin_right: 0.0,
+      margin_bottom: 0.0,
+      margin_left: 0.0,
+      bleed: 0.0,
+      trim: 0.0,
+      margin_boxes,
+      page_style: ComputedStyle::default(),
+    };
+
+    let iterated: Vec<PageMarginArea> = style.margin_boxes.keys().copied().collect();
+    assert_eq!(iterated, canonical);
+  }
 }

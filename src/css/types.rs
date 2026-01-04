@@ -357,7 +357,7 @@ pub enum PagePseudoClass {
 }
 
 /// Margin-box positions inside a page rule.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum PageMarginArea {
   TopLeftCorner,
   TopLeft,
