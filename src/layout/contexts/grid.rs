@@ -336,6 +336,64 @@ impl MeasureKey {
       },
     }
   }
+
+  fn new_with_snapped_sizes(
+    node_ptr: *const BoxNode,
+    known_dimensions: taffy::geometry::Size<Option<f32>>,
+    available_space: taffy::geometry::Size<taffy::style::AvailableSpace>,
+    viewport: Size,
+    drop_available_height: bool,
+  ) -> (
+    Self,
+    taffy::geometry::Size<Option<f32>>,
+    taffy::geometry::Size<taffy::style::AvailableSpace>,
+  ) {
+    let key = Self::new(
+      node_ptr,
+      known_dimensions,
+      available_space,
+      viewport,
+      drop_available_height,
+    );
+
+    let known_dimensions = taffy::geometry::Size {
+      width: key.known_width.map(f32::from_bits),
+      height: key.known_height.map(f32::from_bits),
+    };
+
+    let available_width = match key.available_width {
+      MeasureAvailKey::Definite(bits) => taffy::style::AvailableSpace::Definite(f32::from_bits(bits)),
+      MeasureAvailKey::Indefinite => taffy::style::AvailableSpace::Definite(0.0),
+      MeasureAvailKey::MinContent => taffy::style::AvailableSpace::MinContent,
+      MeasureAvailKey::MaxContent => taffy::style::AvailableSpace::MaxContent,
+      MeasureAvailKey::Ignored => taffy::style::AvailableSpace::Definite(
+        key
+          .known_width
+          .map(f32::from_bits)
+          .unwrap_or(0.0),
+      ),
+    };
+
+    let available_height = match key.available_height {
+      MeasureAvailKey::Definite(bits) => taffy::style::AvailableSpace::Definite(f32::from_bits(bits)),
+      MeasureAvailKey::Indefinite => taffy::style::AvailableSpace::Definite(0.0),
+      MeasureAvailKey::MinContent => taffy::style::AvailableSpace::MinContent,
+      MeasureAvailKey::MaxContent => taffy::style::AvailableSpace::MaxContent,
+      MeasureAvailKey::Ignored => taffy::style::AvailableSpace::Definite(
+        key
+          .known_height
+          .map(f32::from_bits)
+          .unwrap_or(0.0),
+      ),
+    };
+
+    let available_space = taffy::geometry::Size {
+      width: available_width,
+      height: available_height,
+    };
+
+    (key, known_dimensions, available_space)
+  }
 }
 
 fn height_depends_on_available_height(style: &ComputedStyle) -> bool {
@@ -3203,7 +3261,7 @@ impl GridFormattingContext {
                 | FormattingContextType::Inline
                 | FormattingContextType::Table
             ) && !node_or_in_flow_children_depend_on_available_height(box_node));
-          let key = MeasureKey::new(
+          let (key, known_dimensions, available_space) = MeasureKey::new_with_snapped_sizes(
             node_ptr,
             known_dimensions,
             available_space,
@@ -3342,7 +3400,7 @@ impl GridFormattingContext {
         fc_type,
         FormattingContextType::Block | FormattingContextType::Inline | FormattingContextType::Table
       ) && !node_or_in_flow_children_depend_on_available_height(box_node));
-    let key = MeasureKey::new(
+    let (key, known_dimensions, available_space) = MeasureKey::new_with_snapped_sizes(
       node_ptr,
       known_dimensions,
       available_space,
@@ -5361,6 +5419,86 @@ mod tests {
     assert_ne!(
       min_key.available_width, max_key.available_width,
       "min/max-content probes should remain distinct when width is unknown"
+    );
+  }
+
+  #[test]
+  fn grid_measurement_is_deterministic_within_quantized_measure_key() {
+    use taffy::style::AvailableSpace;
+
+    let gc = GridFormattingContext::new();
+    let factory = gc.factory.clone();
+
+    let mut style = ComputedStyle::default();
+    style.width = Some(Length::percent(50.0));
+    let node = BoxNode::new_block(Arc::new(style), FormattingContextType::Block, vec![]);
+    let node_ptr = &node as *const _;
+    let node_id = TaffyNodeId::from(1u64);
+    let viewport = gc.viewport_size;
+
+    let known = taffy::geometry::Size {
+      width: None,
+      height: None,
+    };
+
+    let avail_a = taffy::geometry::Size {
+      width: AvailableSpace::Definite(100.4),
+      height: AvailableSpace::MaxContent,
+    };
+    let avail_b = taffy::geometry::Size {
+      width: AvailableSpace::Definite(100.6),
+      height: AvailableSpace::MaxContent,
+    };
+
+    let key_a = MeasureKey::new(node_ptr, known, avail_a, viewport, false);
+    let key_b = MeasureKey::new(node_ptr, known, avail_b, viewport, false);
+    assert_eq!(key_a, key_b, "expected probes to map to the same quantized MeasureKey");
+
+    let size_a = {
+      let mut measure_cache: FxHashMap<MeasureKey, taffy::geometry::Size<f32>> = FxHashMap::default();
+      let mut measured_fragments: FxHashMap<MeasureKey, FragmentNode> = FxHashMap::default();
+      let mut measured_node_keys: FxHashMap<TaffyNodeId, Vec<MeasureKey>> = FxHashMap::default();
+      gc.measure_grid_item(
+        node_ptr,
+        node_id,
+        known,
+        avail_a,
+        None,
+        AlignItems::Stretch,
+        &factory,
+        &mut measure_cache,
+        &mut measured_fragments,
+        &mut measured_node_keys,
+      )
+    };
+
+    let size_b = {
+      let mut measure_cache: FxHashMap<MeasureKey, taffy::geometry::Size<f32>> = FxHashMap::default();
+      let mut measured_fragments: FxHashMap<MeasureKey, FragmentNode> = FxHashMap::default();
+      let mut measured_node_keys: FxHashMap<TaffyNodeId, Vec<MeasureKey>> = FxHashMap::default();
+      gc.measure_grid_item(
+        node_ptr,
+        node_id,
+        known,
+        avail_b,
+        None,
+        AlignItems::Stretch,
+        &factory,
+        &mut measure_cache,
+        &mut measured_fragments,
+        &mut measured_node_keys,
+      )
+    };
+
+    assert_eq!(
+      size_a.width.to_bits(),
+      size_b.width.to_bits(),
+      "measured widths should match exactly after snapping to the quantized key"
+    );
+    assert_eq!(
+      size_a.height.to_bits(),
+      size_b.height.to_bits(),
+      "measured heights should match exactly after snapping to the quantized key"
     );
   }
 
