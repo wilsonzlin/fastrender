@@ -28,9 +28,11 @@ Compatibility / extras:
   --chrome-timeout <s> Override Chrome timeout only (default: --timeout)
   --render-timeout <s> Override FastRender timeout only (default: --timeout)
   --out <dir>          Alias for --out-dir
+  --no-chrome          Reuse existing <out>/chrome output (skip chrome_baseline.sh)
+  --no-fastrender      Reuse existing <out>/fastrender output (skip render_pages)
   --tolerance <u8>     Forwarded to diff_renders
   --max-diff-percent <f64>
-                        Forwarded to diff_renders
+                         Forwarded to diff_renders
   --max-perceptual-distance <f64>
                          Forwarded to diff_renders
   --ignore-alpha       Forwarded to diff_renders (ignore alpha differences)
@@ -59,6 +61,8 @@ RENDER_TIMEOUT=""
 OUT_DIR="target/chrome_vs_fastrender"
 CHROME_BIN=""
 JS="off"
+NO_CHROME=0
+NO_FASTRENDER=0
 TOLERANCE=""
 MAX_DIFF_PERCENT=""
 MAX_PERCEPTUAL_DISTANCE=""
@@ -91,6 +95,10 @@ while [[ $# -gt 0 ]]; do
         RENDER_TIMEOUT="${2:-}"; shift 2; continue ;;
       --out-dir|--out)
         OUT_DIR="${2:-}"; shift 2; continue ;;
+      --no-chrome)
+        NO_CHROME=1; shift; continue ;;
+      --no-fastrender)
+        NO_FASTRENDER=1; shift; continue ;;
       --chrome)
         CHROME_BIN="${2:-}"; shift 2; continue ;;
       --js)
@@ -314,8 +322,25 @@ REPORT_HTML="${OUT_DIR}/report.html"
 REPORT_JSON="${OUT_DIR}/report.json"
 
 mkdir -p "${OUT_DIR}"
-rm -rf "${CHROME_OUT}" "${FASTRENDER_OUT}"
-mkdir -p "${CHROME_OUT}" "${FASTRENDER_OUT}"
+if [[ "${NO_CHROME}" -eq 1 ]]; then
+  if [[ ! -d "${CHROME_OUT}" ]]; then
+    echo "--no-chrome was set, but Chrome output dir does not exist: ${CHROME_OUT}" >&2
+    exit 1
+  fi
+else
+  rm -rf "${CHROME_OUT}"
+  mkdir -p "${CHROME_OUT}"
+fi
+
+if [[ "${NO_FASTRENDER}" -eq 1 ]]; then
+  if [[ ! -d "${FASTRENDER_OUT}" ]]; then
+    echo "--no-fastrender was set, but FastRender output dir does not exist: ${FASTRENDER_OUT}" >&2
+    exit 1
+  fi
+else
+  rm -rf "${FASTRENDER_OUT}"
+  mkdir -p "${FASTRENDER_OUT}"
+fi
 
 chrome_args=(
   --out-dir "${CHROME_OUT}"
@@ -374,25 +399,35 @@ fi
 echo
 
 echo "==> Chrome baseline: ${CHROME_OUT}"
-set +e
-if [[ "${#FILTERS[@]}" -gt 0 ]]; then
-  scripts/chrome_baseline.sh "${chrome_args[@]}" -- "${FILTERS[@]}"
+chrome_status=0
+if [[ "${NO_CHROME}" -eq 1 ]]; then
+  echo "(skipping chrome_baseline.sh; reusing ${CHROME_OUT})"
 else
-  scripts/chrome_baseline.sh "${chrome_args[@]}"
+  set +e
+  if [[ "${#FILTERS[@]}" -gt 0 ]]; then
+    scripts/chrome_baseline.sh "${chrome_args[@]}" -- "${FILTERS[@]}"
+  else
+    scripts/chrome_baseline.sh "${chrome_args[@]}"
+  fi
+  chrome_status=$?
+  set -e
 fi
-chrome_status=$?
-set -e
 
 echo
 echo "==> FastRender: ${FASTRENDER_OUT}"
-set +e
-if [[ "${#FILTERS[@]}" -gt 0 ]]; then
-  cargo run --release --bin render_pages -- "${render_args[@]}" -- "${FILTERS[@]}"
+fastrender_status=0
+if [[ "${NO_FASTRENDER}" -eq 1 ]]; then
+  echo "(skipping render_pages; reusing ${FASTRENDER_OUT})"
 else
-  cargo run --release --bin render_pages -- "${render_args[@]}"
+  set +e
+  if [[ "${#FILTERS[@]}" -gt 0 ]]; then
+    cargo run --release --bin render_pages -- "${render_args[@]}" -- "${FILTERS[@]}"
+  else
+    cargo run --release --bin render_pages -- "${render_args[@]}"
+  fi
+  fastrender_status=$?
+  set -e
 fi
-fastrender_status=$?
-set -e
 
 echo
 echo "==> Diff report: ${REPORT_HTML}"
