@@ -654,12 +654,8 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
   let mut dpr_arg = args.dpr.map(|dpr| dpr.to_string());
   let mut cache_dir_arg = args.cache_dir.clone();
 
-  let prefetch_support = PrefetchAssetsSupport::detect();
-  let (mut prefetch_asset_args, mut pageset_extra_args) = if prefetch_support.any() {
-    extract_prefetch_assets_args(&args.extra, prefetch_support)
-  } else {
-    (Vec::new(), args.extra.clone())
-  };
+  let mut pageset_extra_args = args.extra.clone();
+  let mut prefetch_asset_args: Vec<String> = Vec::new();
 
   let mut fetch_refresh = args.refresh;
   let mut fetch_allow_http_error_status = args.allow_http_error_status;
@@ -807,6 +803,21 @@ fn run_pageset(args: PagesetArgs) -> Result<()> {
       cmd.env("NO_DISK_CACHE", "1");
     }
   };
+
+  let prefetch_support = if disk_cache_enabled {
+    PrefetchAssetsSupport::detect()
+  } else {
+    // Mirror `scripts/pageset.sh`: prefetch-specific flags don't apply when disk cache is disabled
+    // (the prefetch step is skipped), but we still intercept them so pageset_progress arg parsing
+    // stays forgiving.
+    PrefetchAssetsSupport::assume_supported()
+  };
+  if prefetch_support.any() {
+    let (prefetch_args, filtered) =
+      extract_prefetch_assets_args(&pageset_extra_args, prefetch_support);
+    prefetch_asset_args = prefetch_args;
+    pageset_extra_args = filtered;
+  }
 
   let mut disk_cache_extra_args = extract_disk_cache_args(&pageset_extra_args);
   if disk_cache_enabled
@@ -1332,6 +1343,21 @@ impl PrefetchAssetsSupport {
       max_discovered_assets_per_page: false,
       max_images_per_page: false,
       max_image_urls_per_element: false,
+    }
+  }
+
+  fn assume_supported() -> Self {
+    Self {
+      prefetch_fonts: true,
+      prefetch_images: true,
+      prefetch_iframes: true,
+      prefetch_embeds: true,
+      prefetch_icons: true,
+      prefetch_video_posters: true,
+      prefetch_css_url_assets: true,
+      max_discovered_assets_per_page: true,
+      max_images_per_page: true,
+      max_image_urls_per_element: true,
     }
   }
 }
