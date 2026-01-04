@@ -39,6 +39,10 @@ struct Cli {
   /// Delete entries that cached HTML but look like static subresources by URL extension.
   #[arg(long)]
   delete_html_subresources: bool,
+
+  /// Delete entries that persist a fetch error (`error` field set).
+  #[arg(long)]
+  delete_error_entries: bool,
 }
 
 fn main() -> std::io::Result<()> {
@@ -46,6 +50,7 @@ fn main() -> std::io::Result<()> {
   let options = DiskCacheAuditOptions {
     delete_http_errors: cli.delete_http_errors,
     delete_html_subresources: cli.delete_html_subresources,
+    delete_error_entries: cli.delete_error_entries,
     top_n: cli.top,
   };
   let report = audit_disk_cache_dir(&cli.cache_dir, &options)?;
@@ -74,13 +79,14 @@ fn main() -> std::io::Result<()> {
   );
   println!("Persisted network errors (`error` field): {}", report.error_field_count);
 
-  if cli.delete_http_errors || cli.delete_html_subresources {
+  if cli.delete_http_errors || cli.delete_html_subresources || cli.delete_error_entries {
     println!();
     println!(
-      "Deleted: entries={} http_error_entries={} html_subresource_entries={} (bin={} meta={} alias={})",
+      "Deleted: entries={} http_error_entries={} html_subresource_entries={} error_entries={} (bin={} meta={} alias={})",
       report.deleted_entry_count,
       report.deleted_http_error_entries,
       report.deleted_html_subresource_entries,
+      report.deleted_error_entries,
       report.deleted_bin_files,
       report.deleted_meta_files,
       report.deleted_alias_files
@@ -104,4 +110,3 @@ fn main() -> std::io::Result<()> {
 
   Ok(())
 }
-

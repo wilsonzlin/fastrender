@@ -144,7 +144,7 @@ FASTR_HTTP_BACKEND=reqwest FASTR_HTTP_BROWSER_HEADERS=1 \
 - Typical usage:
   - Audit: `cargo run --release --bin disk_cache_audit --`
   - JSON output (stable keys): `cargo run --release --bin disk_cache_audit -- --json`
-  - Cleanup: `cargo run --release --bin disk_cache_audit -- --delete-http-errors --delete-html-subresources`
+  - Cleanup: `cargo run --release --bin disk_cache_audit -- --delete-http-errors --delete-html-subresources --delete-error-entries`
   - Match non-default cache directory: `cargo run --release --bin disk_cache_audit -- --cache-dir <dir>`
 
 ## `render_pages`

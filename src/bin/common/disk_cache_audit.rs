@@ -16,6 +16,7 @@ const MAX_ALIAS_BYTES: usize = 16 * 1024;
 pub struct DiskCacheAuditOptions {
   pub delete_http_errors: bool,
   pub delete_html_subresources: bool,
+  pub delete_error_entries: bool,
   /// Number of URLs to include per category in `top_*` fields (0 disables).
   pub top_n: usize,
 }
@@ -34,6 +35,7 @@ pub struct DiskCacheAuditReport {
   pub deleted_entry_count: usize,
   pub deleted_http_error_entries: usize,
   pub deleted_html_subresource_entries: usize,
+  pub deleted_error_entries: usize,
   pub deleted_bin_files: usize,
   pub deleted_meta_files: usize,
   pub deleted_alias_files: usize,
@@ -266,6 +268,9 @@ pub fn audit_disk_cache_dir(
     if options.delete_html_subresources && is_html_subresource {
       delete_reasons |= 2;
     }
+    if options.delete_error_entries && has_error_field {
+      delete_reasons |= 4;
+    }
 
     if delete_reasons == 0 {
       continue;
@@ -284,6 +289,9 @@ pub fn audit_disk_cache_dir(
     }
     if delete_reasons & 2 != 0 {
       report.deleted_html_subresource_entries += 1;
+    }
+    if delete_reasons & 4 != 0 {
+      report.deleted_error_entries += 1;
     }
 
     report.deleted_bin_files += remove_file_if_present(&data_path);
@@ -361,6 +369,7 @@ mod tests {
     let opts = DiskCacheAuditOptions {
       delete_http_errors: false,
       delete_html_subresources: false,
+      delete_error_entries: false,
       top_n: 10,
     };
     let report = audit_disk_cache_dir(dir, &opts).unwrap();
@@ -375,6 +384,7 @@ mod tests {
     let del_opts = DiskCacheAuditOptions {
       delete_http_errors: true,
       delete_html_subresources: true,
+      delete_error_entries: false,
       top_n: 0,
     };
     let deleted = audit_disk_cache_dir(dir, &del_opts).unwrap();
@@ -397,6 +407,19 @@ mod tests {
     assert!(dir.join("c.bin").exists());
     assert!(dir.join("c.bin.meta").exists());
     assert!(dir.join("c.alias").exists());
+
+    let del_errors = DiskCacheAuditOptions {
+      delete_http_errors: false,
+      delete_html_subresources: false,
+      delete_error_entries: true,
+      top_n: 0,
+    };
+    let deleted_errors = audit_disk_cache_dir(dir, &del_errors).unwrap();
+    assert_eq!(deleted_errors.deleted_entry_count, 1);
+    assert_eq!(deleted_errors.deleted_error_entries, 1);
+    assert!(!dir.join("c.bin").exists());
+    assert!(!dir.join("c.bin.meta").exists());
+    assert!(!dir.join("c.alias").exists());
   }
 
   #[test]
@@ -410,6 +433,7 @@ mod tests {
     let opts = DiskCacheAuditOptions {
       delete_http_errors: false,
       delete_html_subresources: false,
+      delete_error_entries: false,
       top_n: 0,
     };
     let report = audit_disk_cache_dir(dir, &opts).unwrap();
