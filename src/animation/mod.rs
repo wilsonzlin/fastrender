@@ -2064,7 +2064,12 @@ fn animation_end_progress(direction: AnimationDirection, iterations: f32) -> f32
   }
 }
 
-fn time_based_animation_progress(style: &ComputedStyle, idx: usize, time_ms: f32) -> Option<f32> {
+fn time_based_animation_progress_impl(
+  style: &ComputedStyle,
+  idx: usize,
+  time_ms: f32,
+  respect_play_state: bool,
+) -> Option<f32> {
   if time_ms < 0.0 {
     return None;
   }
@@ -2097,9 +2102,13 @@ fn time_based_animation_progress(style: &ComputedStyle, idx: usize, time_ms: f32
     AnimationPlayState::default(),
   );
 
-  let effective_time_ms = match play_state {
-    AnimationPlayState::Running => time_ms,
-    AnimationPlayState::Paused => 0.0,
+  let effective_time_ms = if respect_play_state {
+    match play_state {
+      AnimationPlayState::Running => time_ms,
+      AnimationPlayState::Paused => 0.0,
+    }
+  } else {
+    time_ms
   };
 
   let local_time = effective_time_ms - delay;
@@ -2149,6 +2158,52 @@ fn time_based_animation_progress(style: &ComputedStyle, idx: usize, time_ms: f32
     iteration_progress
   };
   Some(timing.value_at(directed))
+}
+
+fn time_based_animation_progress(style: &ComputedStyle, idx: usize, time_ms: f32) -> Option<f32> {
+  time_based_animation_progress_impl(style, idx, time_ms, true)
+}
+
+fn settled_time_based_animation_progress(style: &ComputedStyle, idx: usize) -> Option<f32> {
+  let duration = pick(&style.animation_durations, idx, 0.0).max(0.0);
+  let delay = pick(&style.animation_delays, idx, 0.0);
+  let timing = pick(
+    &style.animation_timing_functions,
+    idx,
+    TransitionTimingFunction::Ease,
+  );
+  let iteration_count = pick(
+    &style.animation_iteration_counts,
+    idx,
+    AnimationIterationCount::default(),
+  );
+  let direction = pick(
+    &style.animation_directions,
+    idx,
+    AnimationDirection::default(),
+  );
+
+  let iterations = iteration_count.as_f32();
+  if iterations.is_infinite() {
+    // When no animation sampling timestamp is provided, we still want a stable output for
+    // time-based animations. Infinite animations have no "final" state, so we sample a canonical
+    // progress at the start of the first iteration after any delay. This keeps renders
+    // deterministic while respecting animation-direction (reverse/alternate-reverse start at 1.0).
+    let start_progress = if iteration_reverses(direction, 0) {
+      1.0
+    } else {
+      0.0
+    };
+    return Some(timing.value_at(start_progress));
+  }
+
+  let active_duration = if duration <= 0.0 {
+    0.0
+  } else {
+    duration * iterations.max(0.0)
+  };
+  let sample_time = (delay + active_duration).max(0.0);
+  time_based_animation_progress_impl(style, idx, sample_time, false)
 }
 
 struct TimelineScrollContext {
@@ -2275,6 +2330,20 @@ fn collect_timelines(
       map,
     );
   }
+  if let FragmentContent::RunningAnchor { snapshot, .. } = &node.content {
+    let snapshot_offset = Point::new(
+      origin.x + snapshot.bounds.x(),
+      origin.y + snapshot.bounds.y(),
+    );
+    collect_timelines(
+      snapshot,
+      snapshot_offset,
+      root_viewport,
+      root_content,
+      scroll_state,
+      map,
+    );
+  }
 }
 
 fn apply_animations_to_node(
@@ -2298,8 +2367,10 @@ fn apply_animations_to_node(
         let timeline_ref = pick(timelines_list, idx, AnimationTimeline::Auto);
         let range = pick(ranges_list, idx, AnimationRange::default());
         let progress = match timeline_ref {
-          AnimationTimeline::Auto => animation_time_ms
-            .and_then(|time_ms| time_based_animation_progress(&*style_arc, idx, time_ms)),
+          AnimationTimeline::Auto => match animation_time_ms {
+            Some(time_ms) => time_based_animation_progress(&*style_arc, idx, time_ms),
+            None => settled_time_based_animation_progress(&*style_arc, idx),
+          },
           AnimationTimeline::None => None,
           AnimationTimeline::Named(ref timeline_name) => {
             timelines.get(timeline_name).map(|state| match state {
@@ -2356,6 +2427,20 @@ fn apply_animations_to_node(
     apply_animations_to_node(
       child,
       child_offset,
+      viewport,
+      keyframes,
+      timelines,
+      animation_time_ms,
+    );
+  }
+  if let FragmentContent::RunningAnchor { snapshot, .. } = &mut node.content {
+    let snapshot_offset = Point::new(
+      origin.x + snapshot.bounds.x(),
+      origin.y + snapshot.bounds.y(),
+    );
+    apply_animations_to_node(
+      Arc::make_mut(snapshot),
+      snapshot_offset,
       viewport,
       keyframes,
       timelines,
@@ -2871,7 +2956,11 @@ mod tests {
     std::env::var("UPDATE_ANIMATION_TIME_SAMPLING_GOLDEN").is_ok()
   }
 
-  fn render_animation_sampling_fixture(html: &str, base_url: String, time_ms: f32) -> Vec<u8> {
+  fn render_animation_sampling_fixture(
+    html: &str,
+    base_url: String,
+    time_ms: Option<f32>,
+  ) -> Vec<u8> {
     let policy = ResourcePolicy::default()
       .allow_http(false)
       .allow_https(false)
@@ -2882,9 +2971,10 @@ mod tests {
       .resource_policy(policy)
       .build()
       .expect("renderer");
-    let options = RenderOptions::new()
-      .with_viewport(200, 200)
-      .with_animation_time(time_ms);
+    let mut options = RenderOptions::new().with_viewport(200, 200);
+    if let Some(time_ms) = time_ms {
+      options = options.with_animation_time(time_ms);
+    }
     let pixmap = renderer
       .render_html_with_options(html, options)
       .expect("render fixture");
@@ -2911,7 +3001,7 @@ mod tests {
     ];
 
     for (time_ms, golden_name) in outputs {
-      let rendered = render_animation_sampling_fixture(&html, base_url.clone(), time_ms);
+      let rendered = render_animation_sampling_fixture(&html, base_url.clone(), Some(time_ms));
       let golden_path = golden_dir.join(golden_name);
       if should_update_animation_sampling_goldens() {
         fs::create_dir_all(&golden_dir)
@@ -2942,5 +3032,61 @@ mod tests {
         Some("png")
       );
     }
+  }
+
+  #[test]
+  fn animation_time_sampling_fixture_settles_without_explicit_timestamp() {
+    let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = repo_root.join("tests/pages/fixtures/animation_time_sampling/index.html");
+    let html = fs::read_to_string(&fixture_path).unwrap_or_else(|e| panic!("read fixture: {e}"));
+    let base_url = Url::from_directory_path(
+      fixture_path
+        .parent()
+        .expect("fixture directory should have parent"),
+    )
+    .expect("fixture base url")
+    .to_string();
+
+    let golden_dir = repo_root.join("tests/pages/golden");
+    let golden_name = "animation_time_sampling_t1500.png";
+    let rendered = render_animation_sampling_fixture(&html, base_url, None);
+    let golden_path = golden_dir.join(golden_name);
+
+    if should_update_animation_sampling_goldens() {
+      fs::create_dir_all(&golden_dir)
+        .unwrap_or_else(|e| panic!("Failed to create golden dir {}: {e}", golden_dir.display()));
+      fs::write(&golden_path, &rendered).unwrap_or_else(|e| {
+        panic!(
+          "Failed to write golden {} ({}): {e}",
+          golden_name,
+          golden_path.display()
+        )
+      });
+      return;
+    }
+
+    let golden = fs::read(&golden_path).unwrap_or_else(|e| {
+      panic!(
+        "Missing golden {} ({}): {e}",
+        golden_name,
+        golden_path.display()
+      )
+    });
+    assert_png_eq(&rendered, &golden);
+  }
+
+  #[test]
+  fn settled_infinite_time_based_animations_sample_deterministically() {
+    let rule = fade_rule();
+    let mut style = ComputedStyle::default();
+    style.animation_names = vec!["fade".to_string()];
+    style.animation_durations = vec![1000.0].into();
+    style.animation_iteration_counts = vec![AnimationIterationCount::Infinite].into();
+    style.animation_timing_functions = vec![TransitionTimingFunction::Linear].into();
+    style.animation_directions = vec![AnimationDirection::Reverse].into();
+
+    let progress = settled_time_based_animation_progress(&style, 0).expect("settled progress");
+    assert!((progress - 1.0).abs() < 1e-6, "progress={progress}");
+    assert!((sampled_opacity(&rule, progress) - 1.0).abs() < 1e-6);
   }
 }
