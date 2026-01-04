@@ -380,10 +380,10 @@ fn clip_plus_child_perspective_remains_conservative() {
 
   assert_eq!(
     optimized.len(),
-    5,
-    "clip combined with child perspective should avoid aggressive culling"
+    0,
+    "offscreen clip should cull its subtree even when a descendant has child_perspective"
   );
-  assert_eq!(stats.culled_count, 0);
+  assert_eq!(stats.culled_count, 5);
   assert_balanced(optimized.items());
 }
 
@@ -449,10 +449,10 @@ fn clip_with_child_perspective_remains_conservative() {
 
   assert_eq!(
     optimized.len(),
-    5,
-    "clip combined with child perspective should avoid aggressive culling"
+    0,
+    "offscreen clip should cull its subtree even when a descendant has child_perspective"
   );
-  assert_eq!(stats.culled_count, 0);
+  assert_eq!(stats.culled_count, 5);
   assert_balanced(optimized.items());
 }
 
@@ -960,10 +960,12 @@ fn transform_keeps_clipped_content_from_being_culled() {
   list.push(DisplayItem::PopClip);
 
   let optimizer = DisplayListOptimizer::new();
-  let (optimized, _stats) = optimizer.optimize(list, small_viewport());
+  let (optimized, stats) = optimizer.optimize(list, small_viewport());
 
-  // Clip would normally cull, but the active transform means we conservatively keep the content.
-  assert_eq!(optimized.len(), 5);
+  // The clip is applied in the parent coordinate space and does not move with later transforms, so
+  // the subtree remains fully clipped and can be removed.
+  assert_eq!(optimized.len(), 0);
+  assert_eq!(stats.culled_count, 5);
 }
 
 // ============================================================================
@@ -1249,16 +1251,8 @@ fn deep_filtered_stack_still_matches_baseline_after_culling() {
   let (optimized, stats) = DisplayListOptimizer::new().optimize(list, viewport);
 
   assert_eq!(original_len, expected_len);
-  assert_eq!(optimized.len(), expected_len);
-  assert_eq!(stats.culled_count, 0);
-  assert_eq!(
-    optimized
-      .items()
-      .iter()
-      .filter(|item| matches!(item, DisplayItem::FillRect(_)))
-      .count(),
-    1
-  );
+  assert_eq!(optimized.len(), 0);
+  assert_eq!(stats.culled_count, expected_len);
   assert_balanced(optimized.items());
 }
 
