@@ -23,6 +23,17 @@ fn iframe_documents_ignore_same_origin_subresource_policy() {
     "iframe document loads should not be blocked by same-origin subresource policy"
   );
 
+  assert!(
+    ctx
+      .check_allowed_with_final(
+        ResourceKind::Document,
+        "https://example.test/frame.html",
+        Some("https://other.test/frame.html"),
+      )
+      .is_ok(),
+    "document loads should remain allowed even when redirected cross-origin"
+  );
+
   for (kind, url) in [
     (ResourceKind::Image, "https://other.test/image.png"),
     (ResourceKind::Stylesheet, "https://other.test/style.css"),
