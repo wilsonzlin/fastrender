@@ -6049,15 +6049,21 @@ impl FastRender {
           })
       };
 
-    fn find_head(node: &DomNode) -> Option<&DomNode> {
+    fn find_head(node: &DomNode, in_foreign_namespace: bool) -> Option<&DomNode> {
       if matches!(node.node_type, DomNodeType::ShadowRoot { .. }) {
         return None;
       }
       if node.is_template_element() {
         return None;
       }
+      let next_in_foreign_namespace = in_foreign_namespace
+        || matches!(
+          node.namespace(),
+          Some(ns) if !(ns.is_empty() || ns == crate::dom::HTML_NAMESPACE)
+        );
       if let Some(tag) = node.tag_name() {
-        if tag.eq_ignore_ascii_case("head")
+        if !in_foreign_namespace
+          && tag.eq_ignore_ascii_case("head")
           && matches!(
             node.namespace(),
             Some(ns) if ns.is_empty() || ns == crate::dom::HTML_NAMESPACE
@@ -6067,21 +6073,27 @@ impl FastRender {
         }
       }
       for child in node.traversal_children() {
-        if let Some(found) = find_head(child) {
+        if let Some(found) = find_head(child, next_in_foreign_namespace) {
           return Some(found);
         }
       }
       None
     }
 
-    fn find_first_canonical_href(node: &DomNode) -> Option<String> {
+    fn find_first_canonical_href(node: &DomNode, in_foreign_namespace: bool) -> Option<String> {
       if matches!(node.node_type, DomNodeType::ShadowRoot { .. }) {
         return None;
       }
       if node.is_template_element() {
         return None;
       }
+      let next_in_foreign_namespace = in_foreign_namespace
+        || matches!(
+          node.namespace(),
+          Some(ns) if !(ns.is_empty() || ns == crate::dom::HTML_NAMESPACE)
+        );
       if node.tag_name().is_some_and(|tag| tag.eq_ignore_ascii_case("link"))
+        && !in_foreign_namespace
         && matches!(
           node.namespace(),
           Some(ns) if ns.is_empty() || ns == crate::dom::HTML_NAMESPACE
@@ -6102,21 +6114,27 @@ impl FastRender {
         }
       }
       for child in node.traversal_children() {
-        if let Some(found) = find_first_canonical_href(child) {
+        if let Some(found) = find_first_canonical_href(child, next_in_foreign_namespace) {
           return Some(found);
         }
       }
       None
     }
 
-    fn find_first_og_url(node: &DomNode) -> Option<String> {
+    fn find_first_og_url(node: &DomNode, in_foreign_namespace: bool) -> Option<String> {
       if matches!(node.node_type, DomNodeType::ShadowRoot { .. }) {
         return None;
       }
       if node.is_template_element() {
         return None;
       }
+      let next_in_foreign_namespace = in_foreign_namespace
+        || matches!(
+          node.namespace(),
+          Some(ns) if !(ns.is_empty() || ns == crate::dom::HTML_NAMESPACE)
+        );
       if node.tag_name().is_some_and(|tag| tag.eq_ignore_ascii_case("meta"))
+        && !in_foreign_namespace
         && matches!(
           node.namespace(),
           Some(ns) if ns.is_empty() || ns == crate::dom::HTML_NAMESPACE
@@ -6135,7 +6153,7 @@ impl FastRender {
         }
       }
       for child in node.traversal_children() {
-        if let Some(found) = find_first_og_url(child) {
+        if let Some(found) = find_first_og_url(child, next_in_foreign_namespace) {
           return Some(found);
         }
       }
@@ -6166,16 +6184,18 @@ impl FastRender {
 
     let file_http_base = match document_url {
       Some(doc_url) if doc_url.starts_with("file://") => {
-        let head = find_head(dom);
+        let head = find_head(dom, false);
         let inferred_base = infer_http_base_from_file_url(doc_url);
         let canonical = head
-          .and_then(find_first_canonical_href)
+          .and_then(|head| find_first_canonical_href(head, false))
+          .or_else(|| find_first_canonical_href(dom, false))
           .and_then(|href| resolve_http_hint(doc_url, inferred_base.as_deref(), &href));
         if canonical.is_some() {
           canonical
         } else {
           head
-            .and_then(find_first_og_url)
+            .and_then(|head| find_first_og_url(head, false))
+            .or_else(|| find_first_og_url(dom, false))
             .and_then(|content| resolve_http_hint(doc_url, inferred_base.as_deref(), &content))
             .or_else(|| inferred_base)
         }

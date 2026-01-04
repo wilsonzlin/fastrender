@@ -39,15 +39,21 @@ pub fn find_base_href(dom: &DomNode) -> Option<String> {
     None
   }
 
-  fn find_base(node: &DomNode) -> Option<String> {
+  fn find_base(node: &DomNode, in_foreign_namespace: bool) -> Option<String> {
     if matches!(node.node_type, DomNodeType::ShadowRoot { .. }) {
       return None;
     }
     if node.is_template_element() {
       return None;
     }
+    let next_in_foreign_namespace = in_foreign_namespace
+      || matches!(
+        node.namespace(),
+        Some(ns) if !(ns.is_empty() || ns == HTML_NAMESPACE)
+      );
     if let Some(tag) = node.tag_name() {
-      if tag.eq_ignore_ascii_case("base")
+      if !in_foreign_namespace
+        && tag.eq_ignore_ascii_case("base")
         && matches!(node.namespace(), Some(ns) if ns.is_empty() || ns == HTML_NAMESPACE)
       {
         if let Some(href) = node.get_attribute_ref("href") {
@@ -59,7 +65,7 @@ pub fn find_base_href(dom: &DomNode) -> Option<String> {
       }
     }
     for child in node.traversal_children() {
-      if let Some(found) = find_base(child) {
+      if let Some(found) = find_base(child, next_in_foreign_namespace) {
         return Some(found);
       }
     }
@@ -67,10 +73,10 @@ pub fn find_base_href(dom: &DomNode) -> Option<String> {
   }
 
   let head = find_head(dom)?;
-  if let Some(from_head) = find_base(head) {
+  if let Some(from_head) = find_base(head, false) {
     return Some(from_head);
   }
-  find_base(dom)
+  find_base(dom, false)
 }
 
 /// Compute the document base URL given the parsed DOM and an optional
@@ -172,12 +178,11 @@ mod tests {
   }
 
   #[test]
-  fn find_base_href_ignores_shadow_roots_in_head() {
+  fn find_base_href_ignores_shadow_roots_in_document_body() {
     let dom = parse_html(
-      "<html><head>
+      "<html><head><base href=\"https://good.example/\"></head><body>
         <div id=\"host\"><template shadowroot=\"open\"><base href=\"https://bad.example/\"></template></div>
-        <base href=\"https://good.example/\">
-      </head><body></body></html>",
+      </body></html>",
     )
     .unwrap();
 
@@ -200,7 +205,7 @@ mod tests {
   #[test]
   fn find_base_href_ignores_base_inside_svg() {
     let dom = parse_html(
-      "<html><head><svg><base href=\"https://bad.example/\"></base></svg><base href=\"https://good.example/\"></head></html>",
+      "<html><head><base href=\"https://good.example/\"></head><body><svg><base href=\"https://bad.example/\"></base></svg></body></html>",
     )
     .unwrap();
 
@@ -208,6 +213,16 @@ mod tests {
       find_base_href(&dom),
       Some("https://good.example/".to_string())
     );
+  }
+
+  #[test]
+  fn find_base_href_ignores_base_inside_foreignobject_outside_head() {
+    let dom = parse_html(
+      "<html><head></head><body><svg><foreignObject><base href=\"https://bad.example/\"></base></foreignObject></svg></body></html>",
+    )
+    .unwrap();
+
+    assert_eq!(find_base_href(&dom), None);
   }
 
   #[test]
