@@ -1,6 +1,7 @@
 use anyhow::{bail, Context, Result};
 use clap::{Args, ValueEnum};
 use fastrender::image_compare::{compare_png, CompareConfig};
+use pathdiff::diff_paths;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -940,7 +941,27 @@ fn format_linked_image(label: &str, path: &str) -> String {
   )
 }
 
+fn path_for_report(base: &Path, target: &Path) -> String {
+  let path = diff_paths(target, base).unwrap_or_else(|| target.to_path_buf());
+  let rendered = path.display().to_string();
+  if cfg!(windows) {
+    rendered.replace('\\', "/")
+  } else {
+    rendered
+  }
+}
+
+fn resolve_repo_relative(repo_root: &Path, path: &str) -> PathBuf {
+  let raw = Path::new(path);
+  if raw.is_absolute() {
+    raw.to_path_buf()
+  } else {
+    repo_root.join(raw)
+  }
+}
+
 fn render_html(layout: &Layout, report: &FixtureDeterminismReport) -> String {
+  let repo_root = crate::repo_root();
   let mut rows = String::new();
 
   for fixture in &report.nondeterministic {
@@ -1001,9 +1022,48 @@ fn render_html(layout: &Layout, report: &FixtureDeterminismReport) -> String {
       href = escape_html(&worst.pair_report)
     );
 
+    let artifacts_cell = if let Some(artifacts) = fixture.artifacts.as_ref() {
+      let expected_href =
+        path_for_report(&layout.root, &resolve_repo_relative(&repo_root, &artifacts.expected_png));
+      let actual_href =
+        path_for_report(&layout.root, &resolve_repo_relative(&repo_root, &artifacts.actual_png));
+      let diff_href = artifacts.diff_png.as_deref().map(|p| {
+        path_for_report(&layout.root, &resolve_repo_relative(&repo_root, p))
+      });
+      let snapshot_href = path_for_report(
+        &layout.root,
+        &resolve_repo_relative(&repo_root, &artifacts.diff_snapshots_html),
+      );
+
+      let diff_row = diff_href
+        .as_deref()
+        .map(|href| {
+          format!(
+            r#"<li><a href="{href}">diff.png</a></li>"#,
+            href = escape_html(href)
+          )
+        })
+        .unwrap_or_default();
+
+      format!(
+        r#"<details><summary>artifacts</summary><ul>
+  <li><a href="{expected_href}">expected.png</a></li>
+  <li><a href="{actual_href}">actual.png</a></li>
+  {diff_row}
+  <li><a href="{snapshot_href}">diff_snapshots.html</a></li>
+</ul></details>"#,
+        expected_href = escape_html(&expected_href),
+        actual_href = escape_html(&actual_href),
+        diff_row = diff_row,
+        snapshot_href = escape_html(&snapshot_href),
+      )
+    } else {
+      "-".to_string()
+    };
+
     let error = worst.error.as_deref().unwrap_or_default();
     rows.push_str(&format!(
-      "<tr class=\"{}\"><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td class=\"error\">{}</td></tr>",
+      "<tr class=\"{}\"><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td class=\"error\">{}</td></tr>",
       worst.status.label(),
       escape_html(&fixture.name),
       escape_html(worst.status.label()),
@@ -1016,6 +1076,7 @@ fn render_html(layout: &Layout, report: &FixtureDeterminismReport) -> String {
       before_cell,
       after_and_diff,
       pair_link,
+      artifacts_cell,
       escape_html(error),
     ));
   }
@@ -1079,6 +1140,7 @@ fn render_html(layout: &Layout, report: &FixtureDeterminismReport) -> String {
           <th>Before</th>
           <th>After | Diff</th>
           <th>Pair report</th>
+          <th>Artifacts</th>
           <th>Error</th>
         </tr>
       </thead>

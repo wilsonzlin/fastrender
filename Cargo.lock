@@ -4097,6 +4097,7 @@ dependencies = [
  "cssparser",
  "fastrender",
  "image",
+ "pathdiff",
  "regex",
  "serde",
  "serde_json",
