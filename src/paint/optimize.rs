@@ -1251,6 +1251,36 @@ mod tests {
     assert_eq!(stacking, 0);
   }
 
+  fn assert_nesting_valid(items: &[DisplayItem]) {
+    #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+    enum Entry {
+      Clip,
+      Opacity,
+      Transform,
+      Blend,
+      StackingContext,
+    }
+
+    let mut stack: Vec<Entry> = Vec::new();
+    for item in items {
+      match item {
+        DisplayItem::PushClip(_) => stack.push(Entry::Clip),
+        DisplayItem::PopClip => assert_eq!(stack.pop(), Some(Entry::Clip)),
+        DisplayItem::PushOpacity(_) => stack.push(Entry::Opacity),
+        DisplayItem::PopOpacity => assert_eq!(stack.pop(), Some(Entry::Opacity)),
+        DisplayItem::PushTransform(_) => stack.push(Entry::Transform),
+        DisplayItem::PopTransform => assert_eq!(stack.pop(), Some(Entry::Transform)),
+        DisplayItem::PushBlendMode(_) => stack.push(Entry::Blend),
+        DisplayItem::PopBlendMode => assert_eq!(stack.pop(), Some(Entry::Blend)),
+        DisplayItem::PushStackingContext(_) => stack.push(Entry::StackingContext),
+        DisplayItem::PopStackingContext => assert_eq!(stack.pop(), Some(Entry::StackingContext)),
+        _ => {}
+      }
+    }
+
+    assert!(stack.is_empty(), "unclosed stack entries remain: {stack:?}");
+  }
+
   #[test]
   fn balance_stack_tail_respects_clip_stacking_context_nesting() {
     let optimizer = DisplayListOptimizer::new();
@@ -1291,6 +1321,7 @@ mod tests {
     let view = DisplayListView::new(&items, indices, tail);
     let out: Vec<DisplayItem> = view.iter().cloned().collect();
     assert_balanced(&out);
+    assert_nesting_valid(&out);
   }
 
   #[test]
@@ -1318,6 +1349,7 @@ mod tests {
     let view = DisplayListView::new(&items, indices, tail);
     let out: Vec<DisplayItem> = view.iter().cloned().collect();
     assert_balanced(&out);
+    assert_nesting_valid(&out);
   }
 
   #[test]
@@ -1342,6 +1374,7 @@ mod tests {
     let view = DisplayListView::new(&items, indices, tail);
     let out: Vec<DisplayItem> = view.iter().cloned().collect();
     assert_balanced(&out);
+    assert_nesting_valid(&out);
   }
 
   #[test]
