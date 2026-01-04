@@ -39,13 +39,14 @@ pub fn resolve_transforms(
   let reference = transform_reference_box(style, bounds, viewport);
   let percentage_width = reference.width();
   let percentage_height = reference.height();
+  let (viewport_width, viewport_height) = viewport.unwrap_or((0.0, 0.0));
 
   let resolved_perspective = style.perspective.as_ref().and_then(|len| {
     len
       .resolve_with_context(
         Some(percentage_width),
-        viewport.map(|v| v.0).unwrap_or(0.0),
-        viewport.map(|v| v.1).unwrap_or(0.0),
+        viewport_width,
+        viewport_height,
         style.font_size,
         style.root_font_size,
       )
@@ -66,11 +67,11 @@ pub fn resolve_transforms(
     // transform applies first).
     if let TranslateValue::Values { x, y, z } = style.translate {
       let tx =
-        resolve_transform_length(&x, style.font_size, style.root_font_size, percentage_width);
+        resolve_transform_length(&x, style.font_size, style.root_font_size, percentage_width, viewport);
       let ty =
-        resolve_transform_length(&y, style.font_size, style.root_font_size, percentage_height);
+        resolve_transform_length(&y, style.font_size, style.root_font_size, percentage_height, viewport);
       let tz =
-        resolve_transform_length(&z, style.font_size, style.root_font_size, percentage_width);
+        resolve_transform_length(&z, style.font_size, style.root_font_size, percentage_width, viewport);
       ts = ts.multiply(&Transform3D::translate(tx, ty, tz));
     }
 
@@ -86,33 +87,81 @@ pub fn resolve_transforms(
       let next = match component {
         crate::css::types::Transform::Translate(x, y) => {
           let tx =
-            resolve_transform_length(x, style.font_size, style.root_font_size, percentage_width);
+            resolve_transform_length(
+              x,
+              style.font_size,
+              style.root_font_size,
+              percentage_width,
+              viewport,
+            );
           let ty =
-            resolve_transform_length(y, style.font_size, style.root_font_size, percentage_height);
+            resolve_transform_length(
+              y,
+              style.font_size,
+              style.root_font_size,
+              percentage_height,
+              viewport,
+            );
           Transform3D::translate(tx, ty, 0.0)
         }
         crate::css::types::Transform::TranslateX(x) => {
           let tx =
-            resolve_transform_length(x, style.font_size, style.root_font_size, percentage_width);
+            resolve_transform_length(
+              x,
+              style.font_size,
+              style.root_font_size,
+              percentage_width,
+              viewport,
+            );
           Transform3D::translate(tx, 0.0, 0.0)
         }
         crate::css::types::Transform::TranslateY(y) => {
           let ty =
-            resolve_transform_length(y, style.font_size, style.root_font_size, percentage_height);
+            resolve_transform_length(
+              y,
+              style.font_size,
+              style.root_font_size,
+              percentage_height,
+              viewport,
+            );
           Transform3D::translate(0.0, ty, 0.0)
         }
         crate::css::types::Transform::TranslateZ(z) => Transform3D::translate(
           0.0,
           0.0,
-          resolve_transform_length(z, style.font_size, style.root_font_size, percentage_width),
+          resolve_transform_length(
+            z,
+            style.font_size,
+            style.root_font_size,
+            percentage_width,
+            viewport,
+          ),
         ),
         crate::css::types::Transform::Translate3d(x, y, z) => {
           let tx =
-            resolve_transform_length(x, style.font_size, style.root_font_size, percentage_width);
+            resolve_transform_length(
+              x,
+              style.font_size,
+              style.root_font_size,
+              percentage_width,
+              viewport,
+            );
           let ty =
-            resolve_transform_length(y, style.font_size, style.root_font_size, percentage_height);
+            resolve_transform_length(
+              y,
+              style.font_size,
+              style.root_font_size,
+              percentage_height,
+              viewport,
+            );
           let tz =
-            resolve_transform_length(z, style.font_size, style.root_font_size, percentage_width);
+            resolve_transform_length(
+              z,
+              style.font_size,
+              style.root_font_size,
+              percentage_width,
+              viewport,
+            );
           Transform3D::translate(tx, ty, tz)
         }
         crate::css::types::Transform::Scale(sx, sy) => Transform3D::scale(*sx, *sy, 1.0),
@@ -164,7 +213,13 @@ pub fn resolve_transforms(
           Transform3D::skew(ax.to_radians(), ay.to_radians())
         }
         crate::css::types::Transform::Perspective(len) => Transform3D::perspective(
-          resolve_transform_length(len, style.font_size, style.root_font_size, percentage_width),
+          resolve_transform_length(
+            len,
+            style.font_size,
+            style.root_font_size,
+            percentage_width,
+            viewport,
+          ),
         ),
         crate::css::types::Transform::Matrix(a, b, c, d, e, f) => {
           Transform3D::from_2d(&Transform2D {
@@ -186,12 +241,14 @@ pub fn resolve_transforms(
       style.font_size,
       style.root_font_size,
       percentage_width,
+      viewport,
     );
     let origin_y = resolve_transform_length(
       &style.transform_origin.y,
       style.font_size,
       style.root_font_size,
       percentage_height,
+      viewport,
     );
     let origin = Point::new(reference.x() + origin_x, reference.y() + origin_y);
 
@@ -211,12 +268,14 @@ pub fn resolve_transforms(
       style.font_size,
       style.root_font_size,
       percentage_width,
+      viewport,
     );
     let po_y = resolve_transform_length(
       &style.perspective_origin.y,
       style.font_size,
       style.root_font_size,
       percentage_height,
+      viewport,
     );
     let perspective_origin = Point::new(reference.x() + po_x, reference.y() + po_y);
     Transform3D::translate(perspective_origin.x, perspective_origin.y, 0.0)
@@ -414,6 +473,7 @@ fn resolve_transform_length(
   font_size: f32,
   root_font_size: f32,
   percentage_base: f32,
+  viewport: Option<(f32, f32)>,
 ) -> f32 {
   let needs_viewport = len.unit.is_viewport_relative()
     || len
@@ -421,7 +481,11 @@ fn resolve_transform_length(
       .as_ref()
       .map(|c| c.has_viewport_relative())
       .unwrap_or(false);
-  let (vw, vh) = if needs_viewport {
+  let (vw, vh) = if let Some((w, h)) = viewport {
+    (w, h)
+  } else if needs_viewport {
+    // Preserve historical behaviour for callers that don't provide a viewport size: avoid trying
+    // to resolve viewport-relative lengths and let the fallback path handle them.
     (f32::NAN, f32::NAN)
   } else {
     (0.0, 0.0)
@@ -440,6 +504,7 @@ mod tests {
   use crate::css::types::Transform;
   use crate::style::properties::{apply_declaration_with_base, DEFAULT_VIEWPORT};
   use crate::style::types::{MotionPathCommand, MotionPosition, OffsetAnchor, OffsetPath};
+  use crate::style::values::LengthUnit;
 
   #[test]
   fn resolves_basic_2d_components() {
@@ -529,6 +594,24 @@ mod tests {
       .expect("affine transform");
     assert!((matrix.e + 100.0).abs() < 1e-4);
     assert!((matrix.f + 50.0).abs() < 1e-4);
+  }
+
+  #[test]
+  fn resolves_viewport_relative_translate_when_viewport_provided() {
+    let mut style = ComputedStyle::default();
+    style.translate = TranslateValue::Values {
+      x: Length::new(50.0, LengthUnit::Vw),
+      y: Length::new(25.0, LengthUnit::Vh),
+      z: Length::px(0.0),
+    };
+
+    let bounds = Rect::from_xywh(0.0, 0.0, 100.0, 50.0);
+    let matrix = resolve_transform3d(&style, bounds, Some((200.0, 100.0)))
+      .expect("translate")
+      .to_2d()
+      .expect("affine transform");
+    assert!((matrix.e - 100.0).abs() < 1e-4);
+    assert!((matrix.f - 25.0).abs() < 1e-4);
   }
 
   #[test]
