@@ -399,6 +399,13 @@ struct DiffRendersArgs {
   #[arg(long, default_value = "target/render-diffs")]
   output: PathBuf,
 
+  /// Exit non-zero when differences/missing/errors are present in the report.
+  ///
+  /// By default `cargo xtask diff-renders` exits 0 even when diffs are found so it can be used as a
+  /// non-gating local inspection loop.
+  #[arg(long)]
+  fail_on_differences: bool,
+
   /// Per-channel tolerance (0 = exact match, 5-10 to ignore tiny AA differences)
   #[arg(long, default_value_t = 0)]
   threshold: u8,
@@ -1677,6 +1684,13 @@ fn run_diff_renders(args: DiffRendersArgs) -> Result<()> {
   );
   println!("HTML report: {}", html_path.display());
   println!("JSON report: {}", json_path.display());
+
+  if args.fail_on_differences && (diffs + missing + errors) > 0 {
+    bail!(
+      "diff_renders reported differences; report: {}",
+      html_path.display()
+    );
+  }
 
   Ok(())
 }

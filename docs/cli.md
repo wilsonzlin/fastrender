@@ -91,6 +91,7 @@ FASTR_HTTP_BACKEND=reqwest FASTR_HTTP_BROWSER_HEADERS=1 \
   - Writes `diff_report.html` / `diff_report.json` into `--output` (diff images under `diff_report_files/diffs/`).
   - `--threshold` controls the per-channel tolerance passed through to the underlying `diff_renders --tolerance`.
   - `--ignore-alpha`, `--max-diff-percent`, `--max-perceptual-distance`, `--sort-by`, and `--shard` are forwarded to `diff_renders` (defaults match the historical `--max-diff-percent=0` behavior).
+  - Use `--fail-on-differences` to exit non-zero when the report contains diffs/missing/error entries.
 - Chrome baseline screenshots for offline fixtures (local-only; not committed): `cargo xtask chrome-baseline-fixtures`
 - Chrome-vs-FastRender diff report for offline fixtures (deterministic; offline): `cargo xtask fixture-chrome-diff`
 - Import a bundled capture into a `pages_regression` fixture: `cargo xtask import-page-fixture <bundle_dir|.tar> <fixture_name> [--output-root tests/pages/fixtures --overwrite --dry-run]`
@@ -414,7 +415,7 @@ cargo run --release --bin diff_renders -- \
 - Outputs: `diff_report.json` and `diff_report.html` plus diff PNGs under `<html_stem>_files/diffs/` next to the HTML report (e.g. `diff_report_files/diffs/...`).
 - Tuning: `--tolerance`, `--max-diff-percent`, and `--max-perceptual-distance` accept the same values as the fixture harness (`FIXTURE_TOLERANCE`, `FIXTURE_MAX_DIFFERENT_PERCENT`, `FIXTURE_MAX_PERCEPTUAL_DISTANCE`, and `FIXTURE_FUZZY` env vars are honored when flags are omitted). Use `--ignore-alpha` (or set `FIXTURE_IGNORE_ALPHA=1`) to ignore alpha differences. Use `--sort-by perceptual` to rank diffs by SSIM-derived distance.
 - Supports deterministic sharding with `--shard <index>/<total>` to split large sets across workers.
-- Exit codes: `diff_renders` exits with code 1 when any diff/missing/error entries are present. When running via `cargo run`, Cargo will print a `process didn't exit successfully` wrapper message—this is expected. Use `cargo xtask diff-renders` (or run the built binary directly) if you want cleaner output while still keeping the report.
+- Exit codes: `diff_renders` exits with code 1 when any diff/missing/error entries are present. When running via `cargo run`, Cargo will print a `process didn't exit successfully` wrapper message—this is expected. Use `cargo xtask diff-renders` (or run the built binary directly) if you want cleaner output while still keeping the report; pass `cargo xtask diff-renders --fail-on-differences` to preserve the non-zero exit code while still keeping the report.
 
 ## `diff_snapshots`
 
