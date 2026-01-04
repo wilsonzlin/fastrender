@@ -5340,15 +5340,19 @@ mod tests {
 
   #[test]
   fn svg_filter_recursion_limit_is_noop() {
-    let prev_depth = SVG_FILTER_DEPTH.with(|cell| cell.replace(MAX_SVG_FILTER_DEPTH));
+    struct ResetDepth;
 
-    struct ResetDepth(usize);
     impl Drop for ResetDepth {
       fn drop(&mut self) {
-        SVG_FILTER_DEPTH.with(|cell| cell.set(self.0));
+        SVG_FILTER_DEPTH.with(|cell| cell.set(0));
       }
     }
-    let _reset = ResetDepth(prev_depth);
+
+    let _reset = ResetDepth;
+    SVG_FILTER_DEPTH.with(|cell| {
+      assert_eq!(cell.get(), 0, "expected svg filter recursion depth to start at 0");
+      cell.set(MAX_SVG_FILTER_DEPTH);
+    });
 
     let mut pixmap = new_pixmap(2, 2).unwrap();
     for px in pixmap.pixels_mut() {
