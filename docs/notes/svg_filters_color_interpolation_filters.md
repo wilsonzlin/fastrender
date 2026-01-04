@@ -90,6 +90,12 @@ means we operate on the stored (sRGB-encoded) bytes/floats.
     `reencode_pixmap_to_srgb()`.
   - Integer offsets (no interpolation) are effectively just a copy/shift, so no color-space
     conversion is needed.
+- `filterRes` (filter-level resampling)
+  - When `filterRes` is specified, FastRender downsamples the input pixmap before running the
+    filter graph, then upsamples the final output back to the target size.
+  - Resampling honors the filter’s `color-interpolation-filters`: for `linearRGB`, the source is
+    re-encoded to linearRGB before tiny-skia bilinear resampling, then the resized result is
+    re-encoded back to sRGB.
 - `feColorMatrix`
   - Runs in **linearRGB** when requested.
   - Implementation uses `unpack_color()` / `pack_color()` per pixel.
@@ -138,7 +144,6 @@ Primitives/operations that currently **do not fully honor `color-interpolation-f
 (they still operate directly on stored sRGB bytes in places where linearRGB would require
 conversion):
 
-- `filterRes` downsampling/upsampling (uses tiny-skia bilinear resampling in the stored space)
 - `feTurbulence` (outputs are generated/written as premultiplied RGBA8 with no CIF-aware encoding)
 - `feDropShadow` (CIF is applied to the blur, but not to the final shadow+source compositing step)
 
@@ -149,7 +154,6 @@ conversion):
 - **Conversions at primitive boundaries:** linearRGB primitives convert in/out of linear for their
   computation instead of keeping a float/linear surface across multiple primitives.
 - **Partial coverage of `color-interpolation-filters`:** some primitives do not yet apply explicit
-  sRGB <-> linearRGB conversion for resampling/compositing; `linearRGB` may not be fully honored for
-  filter graphs that rely on `filterRes` downsampling/upsampling (which uses tiny-skia bilinear
-  resampling in the stored space), `feDropShadow`’s final “shadow over source” merge, or on
-  primitives like `feTurbulence` that currently generate channel values without CIF-aware encoding.
+  sRGB <-> linearRGB conversion for every stage; `linearRGB` may not be fully honored for filter
+  graphs that rely on `feDropShadow`’s final “shadow over source” merge, or on primitives like
+  `feTurbulence` that currently generate channel values without CIF-aware encoding.
