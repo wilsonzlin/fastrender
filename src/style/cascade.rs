@@ -16251,7 +16251,7 @@ slot[name=\"s\"]::slotted(.assigned) { color: rgb(4, 5, 6); }"
     let stylesheet = parse_stylesheet(
       r#"
         @property --len {
-          syntax: "<length>";
+          syntax: "*";
           inherits: true;
         }
         @layer theme {
