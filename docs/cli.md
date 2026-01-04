@@ -413,6 +413,7 @@ cargo run --release --bin diff_renders -- \
 - Outputs: `diff_report.json` and `diff_report.html` plus per-page diff PNGs alongside the HTML report.
 - Tuning: `--tolerance`, `--max-diff-percent`, and `--max-perceptual-distance` accept the same values as the fixture harness (`FIXTURE_TOLERANCE`, `FIXTURE_MAX_DIFFERENT_PERCENT`, `FIXTURE_MAX_PERCEPTUAL_DISTANCE`, and `FIXTURE_FUZZY` env vars are honored when flags are omitted). Use `--ignore-alpha` (or set `FIXTURE_IGNORE_ALPHA=1`) to ignore alpha differences. Use `--sort-by perceptual` to rank diffs by SSIM-derived distance.
 - Supports deterministic sharding with `--shard <index>/<total>` to split large sets across workers.
+- Exit codes: `diff_renders` exits with code 1 when any diff/missing/error entries are present. When running via `cargo run`, Cargo will print a `process didn't exit successfully` wrapper message—this is expected. Use `cargo xtask diff-renders` (or run the built binary directly) if you want cleaner output while still keeping the report.
 
 ## `diff_snapshots`
 
