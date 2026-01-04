@@ -29,12 +29,29 @@ pub fn supports_declaration(property: &str, value: &str) -> bool {
   } else {
     Cow::Borrowed(trimmed_property)
   };
-  if !is_known_style_property(normalized_property.as_ref()) {
-    return false;
-  }
-
   let raw_value = value.trim().trim_end_matches(';');
   let value_without_important = raw_value.trim_end_matches("!important").trim();
+
+  // Tailwind v4 gates its `@layer properties` reset behind vendor-prefixed probes:
+  // `(-webkit-hyphens:none)` and `(-moz-orient:inline)`. These should evaluate true so the global
+  // `--tw-*` defaults are retained and participate in the cascade.
+  //
+  // Important: do not treat arbitrary vendor-prefixed properties as supported, since they are
+  // frequently used inside `not(...)` and flipping them to true can invert unrelated feature tests.
+  let normalized_property = match normalized_property.as_ref() {
+    "-webkit-hyphens" => "hyphens",
+    "-moz-orient" => {
+      if value_without_important.eq_ignore_ascii_case("inline") {
+        return true;
+      }
+      return false;
+    }
+    other => other,
+  };
+
+  if !is_known_style_property(normalized_property) {
+    return false;
+  }
 
   if is_global_keyword_str(value_without_important) {
     return true;
@@ -44,14 +61,10 @@ pub fn supports_declaration(property: &str, value: &str) -> bool {
     return true;
   }
 
-  let parsed = match parse_property_value(normalized_property.as_ref(), value_without_important) {
+  let parsed = match parse_property_value(normalized_property, value_without_important) {
     Some(v) => v,
     None => return false,
   };
 
-  supports_parsed_declaration_is_valid(
-    normalized_property.as_ref(),
-    value_without_important,
-    &parsed,
-  )
+  supports_parsed_declaration_is_valid(normalized_property, value_without_important, &parsed)
 }

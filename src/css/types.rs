@@ -1882,6 +1882,10 @@ fn consume_nested_tokens_for_selector_split<'i, 't>(
 mod tests {
   use super::*;
   use crate::css::parser::parse_stylesheet;
+  use crate::css::parser::parse_stylesheet_with_media;
+  use cssparser::ToCss;
+
+  const TAILWIND_V4_PROPERTIES_SUPPORTS: &str = "(((-webkit-hyphens:none)) and (not (margin-trim:inline))) or ((-moz-orient:inline) and (not (color:rgb(from red r g b))))";
 
   #[test]
   fn supports_selector_matches_for_basic_selector() {
@@ -1964,6 +1968,55 @@ mod tests {
     assert!(
       cond.matches(),
       "supports declarations should treat property/value keywords case-insensitively"
+    );
+  }
+
+  #[test]
+  fn supports_tailwind_v4_properties_gate_matches() {
+    let css = format!("@supports {TAILWIND_V4_PROPERTIES_SUPPORTS} {{ .a {{ color: red; }} }}");
+    let stylesheet = parse_stylesheet(&css).expect("@supports stylesheet parses");
+
+    let CssRule::Supports(rule) = stylesheet
+      .rules
+      .first()
+      .expect("expected a single @supports rule")
+    else {
+      panic!("expected @supports rule");
+    };
+
+    assert!(
+      rule.condition.matches(),
+      "Tailwind v4 @supports gate should evaluate true so its --tw-* defaults are applied"
+    );
+  }
+
+  #[test]
+  fn parse_stylesheet_with_media_does_not_prune_tailwind_v4_supports_gate() {
+    let css = format!("@supports {TAILWIND_V4_PROPERTIES_SUPPORTS} {{ .a {{ color: red; }} }}");
+    let media_ctx = MediaContext::screen(800.0, 600.0);
+    let stylesheet =
+      parse_stylesheet_with_media(&css, &media_ctx, None).expect("@supports stylesheet parses");
+
+    let CssRule::Supports(rule) = stylesheet
+      .rules
+      .first()
+      .expect("@supports block should not be pruned")
+    else {
+      panic!("expected @supports rule");
+    };
+    let CssRule::Style(style_rule) = rule.rules.first().expect("nested rule") else {
+      panic!("expected nested style rule");
+    };
+
+    let selector = style_rule
+      .selectors
+      .slice()
+      .first()
+      .expect("expected selector");
+    assert_eq!(
+      selector.to_css_string(),
+      ".a",
+      "@supports block should retain nested `.a` rule after parse-time pruning"
     );
   }
 
