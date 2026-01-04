@@ -121,6 +121,10 @@ struct Args {
   #[arg(long, short, default_value_t = default_jobs())]
   jobs: usize,
 
+  /// Output directory for renders/logs/diagnostics (PNGs + *.log, etc.)
+  #[arg(long, default_value = DEFAULT_RENDER_DIR)]
+  out_dir: PathBuf,
+
   /// Hard per-page timeout in seconds
   #[arg(long, default_value_t = 5)]
   timeout: u64,
@@ -132,10 +136,6 @@ struct Args {
   /// Run renders in-process instead of separate worker processes
   #[arg(long)]
   in_process: bool,
-
-  /// Output directory for renders/logs/diagnostics (PNGs + *.log, etc.)
-  #[arg(long, default_value = DEFAULT_RENDER_DIR)]
-  out_dir: PathBuf,
 
   /// Viewport size as WxH (e.g., 1200x800)
   #[arg(long, value_parser = parse_viewport, default_value = "1200x800")]

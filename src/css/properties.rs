@@ -4344,27 +4344,47 @@ mod tests {
       parse_property_value("scale", "none").expect("parsed"),
       PropertyValue::Scale(ScaleValue::None)
     ));
-      let PropertyValue::Scale(ScaleValue::Values { x, y, z }) =
-        parse_property_value("scale", "2 3").expect("parsed")
-      else {
-        panic!("expected Scale value");
-      };
-      assert!((x - 2.0).abs() < 1e-6);
-      assert!((y - 3.0).abs() < 1e-6);
-      assert!((z - 1.0).abs() < 1e-6);
-      assert!(parse_property_value("scale", "2px").is_none());
-      let PropertyValue::Scale(ScaleValue::Values { x, y, z }) =
-        parse_property_value("scale", "95% 50%").expect("parsed")
-      else {
-        panic!("expected Scale value");
-      };
-      assert!((x - 0.95).abs() < 1e-6);
-      assert!((y - 0.5).abs() < 1e-6);
-      assert!((z - 1.0).abs() < 1e-6);
+    let PropertyValue::Scale(ScaleValue::Values { x, y, z }) =
+      parse_property_value("scale", "2 3").expect("parsed")
+    else {
+      panic!("expected Scale value");
+    };
+    assert!((x - 2.0).abs() < 1e-6);
+    assert!((y - 3.0).abs() < 1e-6);
+    assert!((z - 1.0).abs() < 1e-6);
+    assert!(parse_property_value("scale", "2px").is_none());
+    assert!(parse_property_value("scale", "0px").is_none());
 
-      assert!(matches!(
-        parse_property_value("rotate", "none").expect("parsed"),
-        PropertyValue::Rotate(RotateValue::None)
+    let PropertyValue::Scale(ScaleValue::Values { x, y, z }) =
+      parse_property_value("scale", "50%").expect("parsed")
+    else {
+      panic!("expected Scale value");
+    };
+    assert!((x - 0.5).abs() < 1e-6);
+    assert!((y - 0.5).abs() < 1e-6);
+    assert!((z - 1.0).abs() < 1e-6);
+
+    let PropertyValue::Scale(ScaleValue::Values { x, y, z }) =
+      parse_property_value("scale", "95% 50%").expect("parsed")
+    else {
+      panic!("expected Scale value");
+    };
+    assert!((x - 0.95).abs() < 1e-6);
+    assert!((y - 0.5).abs() < 1e-6);
+    assert!((z - 1.0).abs() < 1e-6);
+
+    let PropertyValue::Scale(ScaleValue::Values { x, y, z }) =
+      parse_property_value("scale", "95% 110%").expect("parsed")
+    else {
+      panic!("expected Scale value");
+    };
+    assert!((x - 0.95).abs() < 1e-6);
+    assert!((y - 1.10).abs() < 1e-6);
+    assert!((z - 1.0).abs() < 1e-6);
+
+    assert!(matches!(
+      parse_property_value("rotate", "none").expect("parsed"),
+      PropertyValue::Rotate(RotateValue::None)
     ));
     let PropertyValue::Rotate(RotateValue::Angle(angle)) =
       parse_property_value("rotate", "90deg").expect("parsed")
