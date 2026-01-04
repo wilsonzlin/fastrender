@@ -100,6 +100,10 @@ cargo xtask chrome-baseline-fixtures
 cargo xtask fixture-chrome-diff
 # Report: target/fixture_chrome_diff/report.html
 #
+# Audit determinism of the FastRender fixture harness by rendering the same fixtures repeatedly and
+# diffing the outputs (writes `target/fixture_determinism/report.html` by default):
+#   cargo xtask fixture-determinism --fixtures preserve_3d_stack --repeat 3
+#
 # Shortcut wrapper for the same offline fixture loop (writes `target/chrome_vs_fastrender_fixtures.html`):
 #   scripts/chrome_vs_fastrender_fixtures.sh
 #
