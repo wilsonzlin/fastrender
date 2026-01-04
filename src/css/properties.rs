@@ -218,7 +218,6 @@ const KNOWN_STYLE_PROPERTIES: &[&str] = &[
   "cursor",
   "direction",
   "display",
-  "-webkit-box-orient",
   "empty-cells",
   "fill",
   "fill-opacity",

@@ -467,11 +467,6 @@ impl Display {
       "list-item" => Ok(Display::ListItem),
       "flow-root" => Ok(Display::FlowRoot),
       "contents" => Ok(Display::Contents),
-      // `display: -webkit-box` is commonly used for `-webkit-line-clamp` patterns.
-      // It corresponds to the 2009 flexbox draft, but treating it as a flow container is a
-      // reasonable fallback for our layout engine.
-      "-webkit-box" => Ok(Display::Block),
-      "-webkit-inline-box" => Ok(Display::InlineBlock),
       _ => Err(DisplayParseError::InvalidValue(s.to_string())),
     }
   }
@@ -685,15 +680,6 @@ mod tests {
   #[test]
   fn test_parse_contents() {
     assert_eq!(Display::parse("contents").unwrap(), Display::Contents);
-  }
-
-  #[test]
-  fn test_parse_webkit_box_aliases() {
-    assert_eq!(Display::parse("-webkit-box").unwrap(), Display::Block);
-    assert_eq!(
-      Display::parse("-webkit-inline-box").unwrap(),
-      Display::InlineBlock
-    );
   }
 
   #[test]
