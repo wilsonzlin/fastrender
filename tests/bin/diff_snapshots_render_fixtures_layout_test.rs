@@ -176,3 +176,70 @@ fn diff_snapshots_links_render_fixtures_layout_pngs() {
     "expected after_png link"
   );
 }
+
+#[test]
+fn diff_snapshots_paths_are_relative_to_report_dir() {
+  let tmp = TempDir::new().expect("tempdir");
+  let before = tmp.path().join("before");
+  let after = tmp.path().join("after");
+  fs::create_dir_all(&before).unwrap();
+  fs::create_dir_all(&after).unwrap();
+
+  let stem = "foo";
+  write_snapshot(&before.join(stem).join("snapshot.json"));
+  write_snapshot(&after.join(stem).join("snapshot.json"));
+
+  fs::write(before.join(format!("{stem}.png")), b"").expect("write before png");
+  fs::write(after.join(format!("{stem}.png")), b"").expect("write after png");
+
+  let report_dir = tmp.path().join("reports").join("subdir");
+  let report_json = report_dir.join("report.json");
+  let report_html = report_dir.join("report.html");
+  let status = Command::new(env!("CARGO_BIN_EXE_diff_snapshots"))
+    .args([
+      "--before",
+      before.to_str().unwrap(),
+      "--after",
+      after.to_str().unwrap(),
+      "--json",
+      report_json.to_str().unwrap(),
+      "--html",
+      report_html.to_str().unwrap(),
+    ])
+    .status()
+    .expect("run diff_snapshots");
+  assert!(status.success(), "expected success, got {:?}", status.code());
+
+  let report: Value =
+    serde_json::from_str(&fs::read_to_string(&report_json).expect("read report"))
+      .expect("parse report json");
+  let entry = report["entries"]
+    .as_array()
+    .and_then(|entries| {
+      entries
+        .iter()
+        .find(|e| e.get("name").and_then(|v| v.as_str()) == Some(stem))
+    })
+    .expect("missing entry for foo");
+
+  assert_eq!(
+    entry.get("before_png").and_then(|v| v.as_str()),
+    Some("../../before/foo.png"),
+    "expected before_png link relative to report dir"
+  );
+  assert_eq!(
+    entry.get("after_png").and_then(|v| v.as_str()),
+    Some("../../after/foo.png"),
+    "expected after_png link relative to report dir"
+  );
+  assert_eq!(
+    entry.get("before_snapshot").and_then(|v| v.as_str()),
+    Some("../../before/foo/snapshot.json"),
+    "expected before_snapshot link relative to report dir"
+  );
+  assert_eq!(
+    entry.get("after_snapshot").and_then(|v| v.as_str()),
+    Some("../../after/foo/snapshot.json"),
+    "expected after_snapshot link relative to report dir"
+  );
+}
