@@ -1480,16 +1480,18 @@ fn repo_root() -> PathBuf {
 }
 
 fn run_render_page(args: RenderPageArgs) -> Result<()> {
+  // Historically `cargo xtask render-page` interpreted relative file/output paths relative to the
+  // caller's current directory. Keep that behaviour even though we run the underlying `cargo run`
+  // from the repo root so default cache paths (`fetches/assets`, etc) stay stable.
+  let cwd = std::env::current_dir().context("resolve current directory")?;
+
   let url = match (args.url, args.file) {
     (Some(url), None) => url,
     (None, Some(path)) => {
-      // Treat relative `--file` paths as repo-root relative so the command behaves the same when
-      // invoked from subdirectories (consistent with other xtask workflows like pageset).
-      let repo_root = repo_root();
       let absolute = if path.is_absolute() {
         path
       } else {
-        repo_root.join(path)
+        cwd.join(path)
       };
       Url::from_file_path(&absolute)
         .map(|u| u.to_string())
@@ -1531,7 +1533,7 @@ fn run_render_page(args: RenderPageArgs) -> Result<()> {
     let output = if output.is_absolute() {
       output
     } else {
-      repo_root.join(output)
+      cwd.join(output)
     };
     cmd.arg(output);
   }
