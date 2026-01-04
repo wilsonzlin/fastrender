@@ -53,6 +53,8 @@ impl ResourceFetcher for StaticFetcher {
       Some(url.to_string()),
     );
     resource.status = Some(200);
+    resource.access_control_allow_origin = Some("*".to_string());
+    resource.timing_allow_origin = Some("https://timing.example".to_string());
     Ok(resource)
   }
 }
@@ -145,9 +147,15 @@ fn bundle_page_cache_captures_from_disk_cache_offline() {
   );
 
   let fetcher = BundledFetcher::new(bundle);
+  let css_res = fetcher.fetch(&css_url).expect("fetch css");
   assert_eq!(
-    fetcher.fetch(&css_url).expect("fetch css").bytes,
+    css_res.bytes,
     b"body { background-image: url(\"bg.png\"); }".to_vec()
+  );
+  assert_eq!(css_res.access_control_allow_origin.as_deref(), Some("*"));
+  assert_eq!(
+    css_res.timing_allow_origin.as_deref(),
+    Some("https://timing.example")
   );
   assert_eq!(
     fetcher.fetch(&img_url).expect("fetch img").bytes,
