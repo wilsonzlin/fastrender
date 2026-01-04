@@ -113,7 +113,6 @@ pub struct FixtureChromeDiffArgs {
   /// Sort report entries by metric within each status group (forwarded to `diff_renders`).
   #[arg(long, value_enum, default_value_t = SortBy::Percent)]
   pub sort_by: SortBy,
-
   /// Ignore alpha differences forwarded to `diff_renders --ignore-alpha`.
   #[arg(long)]
   pub ignore_alpha: bool,
@@ -235,13 +234,13 @@ fn validate_args(args: &FixtureChromeDiffArgs) -> Result<()> {
   if args.timeout == 0 {
     bail!("--timeout must be > 0");
   }
-  if let Some(dist) = args.max_perceptual_distance {
-    if dist < 0.0 || !dist.is_finite() {
-      bail!("--max-perceptual-distance must be >= 0 and finite");
-    }
-  }
   if !(0.0..=100.0).contains(&args.max_diff_percent) || !args.max_diff_percent.is_finite() {
     bail!("--max-diff-percent must be between 0 and 100");
+  }
+  if let Some(dist) = args.max_perceptual_distance {
+    if !(0.0..=1.0).contains(&dist) || !dist.is_finite() {
+      bail!("--max-perceptual-distance must be a finite number between 0 and 1");
+    }
   }
   Ok(())
 }
