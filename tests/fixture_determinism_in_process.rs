@@ -2,12 +2,16 @@ mod r#ref;
 
 use fastrender::image_output::{encode_image, OutputFormat};
 use fastrender::style::media::MediaType;
-use fastrender::{FastRender, FontConfig, Pixmap, RenderOptions, ResourcePolicy};
+use fastrender::{
+  snapshot_pipeline, FastRender, FontConfig, Pixmap, PipelineSnapshot, RenderArtifactRequest,
+  RenderDiagnostics, RenderOptions, ResourcePolicy,
+};
 use rayon::ThreadPoolBuilder;
 use r#ref::image_compare::compare_pngs;
 use r#ref::CompareConfig;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use url::Url;
 
 struct Fixture<'a> {
@@ -54,14 +58,91 @@ fn base_url_for(html_path: &Path) -> Result<String, String> {
 }
 
 fn render_pixmap(renderer: &mut FastRender, html: &str) -> Result<Pixmap, String> {
-  let options = RenderOptions::new()
-    .with_viewport(DEFAULT_VIEWPORT.0, DEFAULT_VIEWPORT.1)
-    .with_device_pixel_ratio(DEFAULT_DPR)
-    .with_media_type(MediaType::Screen);
+  let options = render_options();
 
   renderer
     .render_html_with_options(html, options)
     .map_err(|e| format!("Render failed: {:?}", e))
+}
+
+fn render_options() -> RenderOptions {
+  RenderOptions::new()
+    .with_viewport(DEFAULT_VIEWPORT.0, DEFAULT_VIEWPORT.1)
+    .with_device_pixel_ratio(DEFAULT_DPR)
+    .with_media_type(MediaType::Screen)
+}
+
+fn capture_snapshot(
+  renderer: &mut FastRender,
+  html: &str,
+  base_url: &str,
+  options: RenderOptions,
+) -> Result<(PipelineSnapshot, RenderDiagnostics), String> {
+  let report = renderer
+    .render_html_with_stylesheets_report(html, base_url, options, RenderArtifactRequest::summary())
+    .map_err(|e| format!("Render with artifacts failed: {:?}", e))?;
+
+  let dom = report
+    .artifacts
+    .dom
+    .as_ref()
+    .ok_or_else(|| "missing DOM artifact".to_string())?;
+  let styled = report
+    .artifacts
+    .styled_tree
+    .as_ref()
+    .ok_or_else(|| "missing styled tree artifact".to_string())?;
+  let box_tree = report
+    .artifacts
+    .box_tree
+    .as_ref()
+    .ok_or_else(|| "missing box tree artifact".to_string())?;
+  let fragment_tree = report
+    .artifacts
+    .fragment_tree
+    .as_ref()
+    .ok_or_else(|| "missing fragment tree artifact".to_string())?;
+  let display_list = report
+    .artifacts
+    .display_list
+    .as_ref()
+    .ok_or_else(|| "missing display list artifact".to_string())?;
+
+  Ok((
+    snapshot_pipeline(dom, styled, box_tree, fragment_tree, display_list),
+    report.diagnostics,
+  ))
+}
+
+fn write_json_pretty(path: &Path, value: &impl serde::Serialize) -> Result<(), String> {
+  let json =
+    serde_json::to_string_pretty(value).map_err(|e| format!("serialize {}: {e}", path.display()))?;
+  fs::write(path, json).map_err(|e| format!("write {}: {e}", path.display()))
+}
+
+fn run_diff_snapshots(before_dir: &Path, after_dir: &Path, out_dir: &Path) -> Result<(), String> {
+  let json_path = out_dir.join("diff_snapshots.json");
+  let html_path = out_dir.join("diff_snapshots.html");
+  let status = Command::new(env!("CARGO_BIN_EXE_diff_snapshots"))
+    .current_dir(PathBuf::from(env!("CARGO_MANIFEST_DIR")))
+    .args([
+      "--before",
+      before_dir.to_str().ok_or_else(|| "before dir not utf-8".to_string())?,
+      "--after",
+      after_dir.to_str().ok_or_else(|| "after dir not utf-8".to_string())?,
+      "--json",
+      json_path.to_str().ok_or_else(|| "json path not utf-8".to_string())?,
+      "--html",
+      html_path.to_str().ok_or_else(|| "html path not utf-8".to_string())?,
+    ])
+    .status()
+    .map_err(|e| format!("spawn diff_snapshots: {e}"))?;
+
+  if status.success() {
+    return Ok(());
+  }
+
+  Err(format!("diff_snapshots failed with status {status}"))
 }
 
 fn pixmap_to_straight_rgba(pixmap: &Pixmap) -> Vec<u8> {
@@ -132,7 +213,7 @@ fn run_fixture(fixture: &Fixture<'_>, compare_config: &CompareConfig) -> Result<
     .allow_data(true);
 
   let mut renderer = FastRender::builder()
-    .base_url(base_url)
+    .base_url(base_url.clone())
     .font_sources(FontConfig::bundled_only())
     .resource_policy(policy)
     .build()
@@ -149,6 +230,7 @@ fn run_fixture(fixture: &Fixture<'_>, compare_config: &CompareConfig) -> Result<
 
   let mut expected: Option<Pixmap> = None;
   let mut expected_rgba: Option<Vec<u8>> = None;
+  let mut expected_threads: Option<usize> = None;
   let output_dir = diff_dir_for_fixture(fixture.name);
 
   for (idx, &threads) in RENDER_SCHEDULE.iter().enumerate() {
@@ -168,11 +250,86 @@ fn run_fixture(fixture: &Fixture<'_>, compare_config: &CompareConfig) -> Result<
           encode_image(expected_pixmap, OutputFormat::Png).map_err(|e| format!("{e:?}"))?;
         let rendered_png =
           encode_image(&rendered, OutputFormat::Png).map_err(|e| format!("{e:?}"))?;
-        compare_pngs(&label, &rendered_png, &expected_png, compare_config, &output_dir)?;
+        let mut message =
+          compare_pngs(&label, &rendered_png, &expected_png, compare_config, &output_dir)
+            .unwrap_err();
+
+        // If the pixel diff is due to nondeterminism, make it actionable by capturing pipeline
+        // snapshots (DOM/styled/box/fragment/display-list) for both variants and running
+        // `diff_snapshots` to produce a stage-level report.
+        let snapshot_root = output_dir.join("snapshots");
+        let before_dir = snapshot_root.join("run1").join(fixture.name);
+        let after_dir = snapshot_root.join("run2").join(fixture.name);
+
+        let mut snapshot_error = None::<String>;
+        let expected_threads = expected_threads.unwrap_or(RENDER_SCHEDULE[0]);
+        let expected_pool = match expected_threads {
+          1 => &pool_1,
+          4 => &pool_4,
+          other => return Err(format!("Unsupported expected thread pool size {other}")),
+        };
+
+        let before_capture = expected_pool.install(|| {
+          capture_snapshot(&mut renderer, &html, &base_url, render_options())
+        });
+        let after_capture =
+          pool.install(|| capture_snapshot(&mut renderer, &html, &base_url, render_options()));
+
+        match (before_capture, after_capture) {
+          (Ok((before_snapshot, before_diag)), Ok((after_snapshot, after_diag))) => {
+            fs::create_dir_all(&before_dir)
+              .map_err(|e| format!("create {}: {e}", before_dir.display()))?;
+            fs::create_dir_all(&after_dir)
+              .map_err(|e| format!("create {}: {e}", after_dir.display()))?;
+
+            if let Err(err) = write_json_pretty(&before_dir.join("snapshot.json"), &before_snapshot)
+            {
+              snapshot_error = Some(err);
+            } else if let Err(err) =
+              write_json_pretty(&after_dir.join("snapshot.json"), &after_snapshot)
+            {
+              snapshot_error = Some(err);
+            } else if let Err(err) =
+              write_json_pretty(&before_dir.join("diagnostics.json"), &before_diag)
+            {
+              snapshot_error = Some(err);
+            } else if let Err(err) =
+              write_json_pretty(&after_dir.join("diagnostics.json"), &after_diag)
+            {
+              snapshot_error = Some(err);
+            } else if let Err(err) = fs::write(before_dir.join("render.png"), &expected_png)
+              .map_err(|e| format!("write render.png: {e}"))
+            {
+              snapshot_error = Some(err);
+            } else if let Err(err) = fs::write(after_dir.join("render.png"), &rendered_png)
+              .map_err(|e| format!("write render.png: {e}"))
+            {
+              snapshot_error = Some(err);
+            } else if let Err(err) = run_diff_snapshots(&before_dir, &after_dir, &output_dir) {
+              snapshot_error = Some(err);
+            }
+          }
+          (Err(err), _) => snapshot_error = Some(err),
+          (_, Err(err)) => snapshot_error = Some(err),
+        }
+
+        message.push_str("\n\nSnapshot artifacts:");
+        message.push_str(&format!("\n  before: {}", before_dir.display()));
+        message.push_str(&format!("\n  after:  {}", after_dir.display()));
+        message.push_str(&format!(
+          "\n  diff_snapshots: {}",
+          output_dir.join("diff_snapshots.html").display()
+        ));
+        if let Some(err) = snapshot_error {
+          message.push_str(&format!("\n\nSnapshot capture failed:\n{err}"));
+        }
+
+        return Err(message);
       }
     } else {
       expected_rgba = Some(pixmap_to_straight_rgba(&rendered));
       expected = Some(rendered);
+      expected_threads = Some(threads);
     }
   }
 
