@@ -489,9 +489,7 @@ fn rewrite_known_pageset_url(url: &str) -> Option<String> {
       // MDN occasionally moves pages without leaving an HTTP redirect. Rewrite known moved pages
       // so the pageset can continue to fetch deterministically while keeping the original cache
       // stem/progress artifact name stable.
-      if parsed.path()
-        == "/en-US/docs/Web/CSS/CSS_multicol_layout/Using_multi-column_layouts"
-      {
+      if parsed.path() == "/en-US/docs/Web/CSS/CSS_multicol_layout/Using_multi-column_layouts" {
         parsed.set_path("/en-US/docs/Web/CSS/Guides/Multicol_layout/Using");
       } else {
         return None;
@@ -1980,14 +1978,8 @@ fn url_looks_like_suffix(url: &str, suffix: &str) -> bool {
 
 fn url_without_query_fragment(url: &str) -> &str {
   let url = url.trim();
-  let url = url
-    .split_once('#')
-    .map(|(before, _)| before)
-    .unwrap_or(url);
-  url
-    .split_once('?')
-    .map(|(before, _)| before)
-    .unwrap_or(url)
+  let url = url.split_once('#').map(|(before, _)| before).unwrap_or(url);
+  url.split_once('?').map(|(before, _)| before).unwrap_or(url)
 }
 
 fn ends_with_ignore_ascii_case(value: &str, suffix: &str) -> bool {
@@ -2013,6 +2005,17 @@ pub(crate) fn url_looks_like_image_asset(url: &str) -> bool {
   ]
   .into_iter()
   .any(|suffix| ends_with_ignore_ascii_case(url, suffix))
+}
+
+fn url_looks_like_stylesheet_asset(url: &str) -> bool {
+  url_looks_like_suffix(url, ".css")
+}
+
+fn url_looks_like_font_asset(url: &str) -> bool {
+  let url = url_without_query_fragment(url);
+  [".woff2", ".woff", ".ttf", ".otf", ".eot"]
+    .into_iter()
+    .any(|suffix| ends_with_ignore_ascii_case(url, suffix))
 }
 
 fn url_looks_like_svg_or_html(url: &str) -> bool {
@@ -2088,15 +2091,26 @@ pub fn ensure_font_mime_sane(resource: &FetchedResource, requested_url: &str) ->
   if !strict_mime_checks_enabled() || resource.status.is_none() {
     return Ok(());
   }
-  let Some(content_type) = resource.content_type.as_deref() else {
-    return Ok(());
-  };
-  let mime = content_type_mime(content_type);
-  if mime_is_html(mime) {
+
+  if let Some(content_type) = resource.content_type.as_deref() {
+    let mime = content_type_mime(content_type);
+    if mime_is_html(mime) {
+      return Err(response_resource_error(
+        resource,
+        requested_url,
+        format!("unexpected content-type {mime}"),
+      ));
+    }
+  }
+
+  let final_url = resource.final_url.as_deref().unwrap_or(requested_url);
+  if (url_looks_like_font_asset(requested_url) || url_looks_like_font_asset(final_url))
+    && file_payload_looks_like_markup_but_not_svg(&resource.bytes)
+  {
     return Err(response_resource_error(
       resource,
       requested_url,
-      format!("unexpected content-type {mime}"),
+      "unexpected markup response body",
     ));
   }
   Ok(())
@@ -2107,15 +2121,26 @@ pub fn ensure_stylesheet_mime_sane(resource: &FetchedResource, requested_url: &s
   if !strict_mime_checks_enabled() || resource.status.is_none() {
     return Ok(());
   }
-  let Some(content_type) = resource.content_type.as_deref() else {
-    return Ok(());
-  };
-  let mime = content_type_mime(content_type);
-  if mime_is_html(mime) {
+
+  if let Some(content_type) = resource.content_type.as_deref() {
+    let mime = content_type_mime(content_type);
+    if mime_is_html(mime) {
+      return Err(response_resource_error(
+        resource,
+        requested_url,
+        format!("unexpected content-type {mime}"),
+      ));
+    }
+  }
+
+  let final_url = resource.final_url.as_deref().unwrap_or(requested_url);
+  if (url_looks_like_stylesheet_asset(requested_url) || url_looks_like_stylesheet_asset(final_url))
+    && file_payload_looks_like_markup_but_not_svg(&resource.bytes)
+  {
     return Err(response_resource_error(
       resource,
       requested_url,
-      format!("unexpected content-type {mime}"),
+      "unexpected markup response body",
     ));
   }
   Ok(())
@@ -3306,8 +3331,13 @@ impl HttpFetcher {
               content_type = Some(OFFLINE_FIXTURE_PLACEHOLDER_PNG_MIME.to_string());
               decode_stage = decode_stage_for_content_type(content_type.as_deref());
             }
-            if should_substitute_markup_image_body(kind, url, &final_url, content_type.as_deref(), &bytes)
-            {
+            if should_substitute_markup_image_body(
+              kind,
+              url,
+              &final_url,
+              content_type.as_deref(),
+              &bytes,
+            ) {
               let take = OFFLINE_FIXTURE_PLACEHOLDER_PNG.len().min(read_limit);
               bytes = OFFLINE_FIXTURE_PLACEHOLDER_PNG[..take].to_vec();
               content_type = Some(OFFLINE_FIXTURE_PLACEHOLDER_PNG_MIME.to_string());
@@ -3765,8 +3795,13 @@ impl HttpFetcher {
               content_type = Some(OFFLINE_FIXTURE_PLACEHOLDER_PNG_MIME.to_string());
               decode_stage = decode_stage_for_content_type(content_type.as_deref());
             }
-            if should_substitute_markup_image_body(kind, url, &final_url, content_type.as_deref(), &bytes)
-            {
+            if should_substitute_markup_image_body(
+              kind,
+              url,
+              &final_url,
+              content_type.as_deref(),
+              &bytes,
+            ) {
               let take = OFFLINE_FIXTURE_PLACEHOLDER_PNG.len().min(read_limit);
               bytes = OFFLINE_FIXTURE_PLACEHOLDER_PNG[..take].to_vec();
               content_type = Some(OFFLINE_FIXTURE_PLACEHOLDER_PNG_MIME.to_string());
@@ -4266,8 +4301,13 @@ impl HttpFetcher {
               content_type = Some(OFFLINE_FIXTURE_PLACEHOLDER_PNG_MIME.to_string());
               decode_stage = decode_stage_for_content_type(content_type.as_deref());
             }
-            if should_substitute_markup_image_body(kind, url, &final_url, content_type.as_deref(), &bytes)
-            {
+            if should_substitute_markup_image_body(
+              kind,
+              url,
+              &final_url,
+              content_type.as_deref(),
+              &bytes,
+            ) {
               bytes = OFFLINE_FIXTURE_PLACEHOLDER_PNG.to_vec();
               content_type = Some(OFFLINE_FIXTURE_PLACEHOLDER_PNG_MIME.to_string());
               decode_stage = decode_stage_for_content_type(content_type.as_deref());
@@ -4816,8 +4856,13 @@ impl HttpFetcher {
               content_type = Some(OFFLINE_FIXTURE_PLACEHOLDER_PNG_MIME.to_string());
               decode_stage = decode_stage_for_content_type(content_type.as_deref());
             }
-            if should_substitute_markup_image_body(kind, url, &final_url, content_type.as_deref(), &bytes)
-            {
+            if should_substitute_markup_image_body(
+              kind,
+              url,
+              &final_url,
+              content_type.as_deref(),
+              &bytes,
+            ) {
               bytes = OFFLINE_FIXTURE_PLACEHOLDER_PNG.to_vec();
               content_type = Some(OFFLINE_FIXTURE_PLACEHOLDER_PNG_MIME.to_string());
               decode_stage = decode_stage_for_content_type(content_type.as_deref());
@@ -5552,6 +5597,13 @@ struct CachedSnapshot {
 }
 
 impl CachedSnapshot {
+  fn is_successful_http_response(&self) -> bool {
+    match &self.value {
+      CacheValue::Resource(res) => res.status.map(|code| code < 400).unwrap_or(true),
+      CacheValue::Error(_) => false,
+    }
+  }
+
   #[cfg(feature = "disk_cache")]
   pub(crate) fn as_resource(&self) -> Option<FetchedResource> {
     match &self.value {
@@ -6805,6 +6857,24 @@ impl<F: ResourceFetcher> ResourceFetcher for CachingFetcher<F> {
               false,
             )
           }
+        } else if res.status.is_some_and(|code| code >= 400)
+          && plan
+            .cached
+            .as_ref()
+            .is_some_and(|snapshot| snapshot.is_successful_http_response())
+        {
+          if let Some(snapshot) = plan.cached.as_ref() {
+            record_cache_stale_hit();
+            let fallback = snapshot.value.as_result();
+            if let Ok(ref ok) = fallback {
+              record_resource_cache_bytes(ok.bytes.len());
+            }
+            let is_ok = fallback.is_ok();
+            (fallback, is_ok)
+          } else {
+            record_cache_miss();
+            (Ok(res), false)
+          }
         } else if res.status.map(is_transient_http_status).unwrap_or(false) {
           if let Some(snapshot) = plan.cached.as_ref() {
             record_cache_stale_hit();
@@ -7017,7 +7087,25 @@ impl<F: ResourceFetcher> ResourceFetcher for CachingFetcher<F> {
             )
           }
         } else {
-          if res.status.map(is_transient_http_status).unwrap_or(false) {
+          if res.status.is_some_and(|code| code >= 400)
+            && plan
+              .cached
+              .as_ref()
+              .is_some_and(|snapshot| snapshot.is_successful_http_response())
+          {
+            if let Some(snapshot) = plan.cached.as_ref() {
+              record_cache_stale_hit();
+              let fallback = snapshot.value.as_result();
+              if let Ok(ref ok) = fallback {
+                record_resource_cache_bytes(ok.bytes.len());
+              }
+              let is_ok = fallback.is_ok();
+              (fallback, is_ok)
+            } else {
+              record_cache_miss();
+              (Ok(res), false)
+            }
+          } else if res.status.map(is_transient_http_status).unwrap_or(false) {
             if let Some(snapshot) = plan.cached.as_ref() {
               record_cache_stale_hit();
               let fallback = snapshot.value.as_result();
@@ -7108,8 +7196,7 @@ impl<F: ResourceFetcher> ResourceFetcher for CachingFetcher<F> {
 
     let key = CacheKey::new(kind, url.to_string());
     if let Some(snapshot) = self.cached_entry(&key) {
-      let result = snapshot.value.as_result();
-      if let Ok(mut res) = result {
+      if let CacheValue::Resource(mut res) = snapshot.value {
         if res.bytes.len() > max_bytes {
           res.bytes.truncate(max_bytes);
         }
@@ -7118,7 +7205,6 @@ impl<F: ResourceFetcher> ResourceFetcher for CachingFetcher<F> {
         reserve_policy_bytes(&self.policy, &res)?;
         return Ok(res);
       }
-      return result;
     }
 
     self.inner.fetch_partial_with_context(kind, url, max_bytes)
@@ -7403,7 +7489,11 @@ const OFFLINE_FIXTURE_PLACEHOLDER_WOFF2: &[u8] =
   include_bytes!("../tests/pages/fixtures/assets/fonts/DejaVuSans-subset.woff2");
 const OFFLINE_FIXTURE_PLACEHOLDER_WOFF2_MIME: &str = "font/woff2";
 
-fn should_substitute_empty_image_body(kind: FetchContextKind, status: u16, headers: &HeaderMap) -> bool {
+fn should_substitute_empty_image_body(
+  kind: FetchContextKind,
+  status: u16,
+  headers: &HeaderMap,
+) -> bool {
   // Some sites (notably Akamai `akam/13/pixel_*` tracking endpoints used on multiple pageset pages)
   // respond to `<img>` requests with an explicit empty entity body (`Content-Length: 0`) while still
   // returning a successful 2xx status and a non-image content-type. Treat those as a 1x1
@@ -7418,7 +7508,11 @@ fn url_has_captcha_param(url: &str) -> bool {
   url.contains("?captcha=") || url.contains("&captcha=")
 }
 
-fn should_substitute_captcha_image_response(kind: FetchContextKind, status: u16, final_url: &str) -> bool {
+fn should_substitute_captcha_image_response(
+  kind: FetchContextKind,
+  status: u16,
+  final_url: &str,
+) -> bool {
   // NYU (and similar bot-mitigation setups) can redirect blocked subresource requests to a URL with
   // `?captcha=...` and return an HTTP error status. Treat these as missing images rather than hard
   // failures so the renderer can proceed deterministically.
@@ -7688,6 +7782,38 @@ mod tests {
     assert!(mime_is_svg("IMAGE/SVG+XML"));
     assert!(mime_is_svg("image/svg+xml"));
     assert!(!mime_is_svg("image/png"));
+  }
+
+  #[test]
+  fn stylesheet_mime_sanity_rejects_markup_bodies_for_css_urls() {
+    let mut resource = FetchedResource::new(
+      b"<!DOCTYPE html><html><title>blocked</title></html>".to_vec(),
+      Some("text/css".to_string()),
+    );
+    resource.status = Some(200);
+    let url = "https://example.com/style.css";
+    let err = ensure_stylesheet_mime_sane(&resource, url)
+      .expect_err("expected markup payload to be rejected");
+    assert!(
+      err.to_string().contains("unexpected markup response body"),
+      "unexpected error: {err}"
+    );
+  }
+
+  #[test]
+  fn font_mime_sanity_rejects_markup_bodies_for_font_urls() {
+    let mut resource = FetchedResource::new(
+      b"<!DOCTYPE html><html><title>blocked</title></html>".to_vec(),
+      Some("application/octet-stream".to_string()),
+    );
+    resource.status = Some(200);
+    let url = "https://example.com/font.woff2";
+    let err =
+      ensure_font_mime_sane(&resource, url).expect_err("expected markup payload to be rejected");
+    assert!(
+      err.to_string().contains("unexpected markup response body"),
+      "unexpected error: {err}"
+    );
   }
 
   #[test]
@@ -8353,7 +8479,13 @@ mod tests {
 
       let url = format!("http://{addr}/pixel");
       let res = fetcher
-        .fetch_http_partial_inner_reqwest(FetchContextKind::Image, &url, 8, &deadline, Instant::now())
+        .fetch_http_partial_inner_reqwest(
+          FetchContextKind::Image,
+          &url,
+          8,
+          &deadline,
+          Instant::now(),
+        )
         .expect("reqwest image prefix should substitute placeholder");
       handle.join().unwrap();
       assert_eq!(res.bytes, OFFLINE_FIXTURE_PLACEHOLDER_PNG[..8]);
@@ -8382,7 +8514,8 @@ mod tests {
     let deadline = None;
 
     {
-      let Some(listener) = try_bind_localhost("http_html_image_payload_substitutes_placeholder_ureq")
+      let Some(listener) =
+        try_bind_localhost("http_html_image_payload_substitutes_placeholder_ureq")
       else {
         return;
       };
@@ -8504,7 +8637,13 @@ mod tests {
 
       let url = format!("http://{addr}/pixel.html");
       let res = fetcher
-        .fetch_http_partial_inner_reqwest(FetchContextKind::Image, &url, 8, &deadline, Instant::now())
+        .fetch_http_partial_inner_reqwest(
+          FetchContextKind::Image,
+          &url,
+          8,
+          &deadline,
+          Instant::now(),
+        )
         .expect("reqwest image prefix should substitute placeholder");
       handle.join().unwrap();
       assert_eq!(res.bytes, OFFLINE_FIXTURE_PLACEHOLDER_PNG[..8]);
@@ -8533,9 +8672,9 @@ mod tests {
     let deadline = None;
 
     {
-      let Some(listener) = try_bind_localhost(
-        "http_html_image_payload_for_jpg_does_not_substitute_placeholder_ureq",
-      ) else {
+      let Some(listener) =
+        try_bind_localhost("http_html_image_payload_for_jpg_does_not_substitute_placeholder_ureq")
+      else {
         return;
       };
       let addr = listener.local_addr().unwrap();
@@ -8647,7 +8786,13 @@ mod tests {
 
       let url = format!("http://{addr}/photo.jpg");
       let res = fetcher
-        .fetch_http_partial_inner_reqwest(FetchContextKind::Image, &url, 8, &deadline, Instant::now())
+        .fetch_http_partial_inner_reqwest(
+          FetchContextKind::Image,
+          &url,
+          8,
+          &deadline,
+          Instant::now(),
+        )
         .expect("reqwest prefix should succeed");
       handle.join().unwrap();
       assert_eq!(res.bytes, body.as_bytes()[..8]);
@@ -8674,7 +8819,8 @@ mod tests {
     let deadline = None;
 
     {
-      let Some(listener) = try_bind_localhost("http_redirect_to_html_for_jpg_does_not_substitute_placeholder_ureq")
+      let Some(listener) =
+        try_bind_localhost("http_redirect_to_html_for_jpg_does_not_substitute_placeholder_ureq")
       else {
         return;
       };
@@ -9185,8 +9331,7 @@ mod tests {
       res_reqwest.bytes.is_empty(),
       "expected empty 404 body to be returned"
     );
-    let err =
-      ensure_http_success(&res_reqwest, &url).expect_err("404 should be an HTTP failure");
+    let err = ensure_http_success(&res_reqwest, &url).expect_err("404 should be an HTTP failure");
     assert!(
       err.to_string().contains("HTTP status 404"),
       "unexpected error message: {err}"
@@ -9209,8 +9354,7 @@ mod tests {
         .set_read_timeout(Some(Duration::from_millis(500)))
         .unwrap();
       let _ = read_http_request(&mut stream);
-      let headers =
-        "HTTP/1.1 200 OK\r\nContent-Type: image/gif\r\nConnection: close\r\n\r\n";
+      let headers = "HTTP/1.1 200 OK\r\nContent-Type: image/gif\r\nConnection: close\r\n\r\n";
       stream.write_all(headers.as_bytes()).unwrap();
     });
 
@@ -9407,7 +9551,9 @@ mod tests {
       Some("https://developer.mozilla.org/en-US/docs/Web/CSS/Guides/Multicol_layout/Using")
     );
     assert_eq!(
-      rewrite_known_pageset_url("https://developer.mozilla.org/en-US/docs/Web/CSS/text-orientation"),
+      rewrite_known_pageset_url(
+        "https://developer.mozilla.org/en-US/docs/Web/CSS/text-orientation"
+      ),
       None
     );
     assert_eq!(rewrite_known_pageset_url("https://example.com"), None);
@@ -12316,6 +12462,97 @@ mod tests {
     assert_eq!(counter.load(Ordering::SeqCst), 1);
   }
 
+  #[test]
+  fn caching_fetcher_fetch_partial_delegates_to_inner_partial() {
+    #[derive(Clone)]
+    struct PartialOnlyFetcher;
+
+    impl ResourceFetcher for PartialOnlyFetcher {
+      fn fetch(&self, _url: &str) -> Result<FetchedResource> {
+        panic!("fetch() should not be called for partial fetches");
+      }
+
+      fn fetch_partial_with_context(
+        &self,
+        _kind: FetchContextKind,
+        url: &str,
+        max_bytes: usize,
+      ) -> Result<FetchedResource> {
+        let mut res = FetchedResource::new(b"0123456789".to_vec(), Some("text/plain".to_string()));
+        res.final_url = Some(url.to_string());
+        if res.bytes.len() > max_bytes {
+          res.bytes.truncate(max_bytes);
+        }
+        Ok(res)
+      }
+    }
+
+    let cache = CachingFetcher::new(PartialOnlyFetcher);
+    let url = "http://example.com/partial";
+    let res = cache
+      .fetch_partial_with_context(FetchContextKind::Image, url, 4)
+      .expect("partial fetch");
+    assert_eq!(res.bytes, b"0123");
+  }
+
+  #[test]
+  fn caching_fetcher_fetch_partial_does_not_populate_full_cache() {
+    #[derive(Clone)]
+    struct PartialCountingFetcher {
+      fetch_calls: Arc<AtomicUsize>,
+      partial_calls: Arc<AtomicUsize>,
+    }
+
+    impl ResourceFetcher for PartialCountingFetcher {
+      fn fetch(&self, url: &str) -> Result<FetchedResource> {
+        self.fetch_calls.fetch_add(1, Ordering::SeqCst);
+        let mut res = FetchedResource::new(b"full-body".to_vec(), Some("text/plain".to_string()));
+        res.final_url = Some(url.to_string());
+        Ok(res)
+      }
+
+      fn fetch_partial_with_context(
+        &self,
+        _kind: FetchContextKind,
+        url: &str,
+        max_bytes: usize,
+      ) -> Result<FetchedResource> {
+        self.partial_calls.fetch_add(1, Ordering::SeqCst);
+        let mut res =
+          FetchedResource::new(b"partial-body".to_vec(), Some("text/plain".to_string()));
+        res.final_url = Some(url.to_string());
+        if res.bytes.len() > max_bytes {
+          res.bytes.truncate(max_bytes);
+        }
+        Ok(res)
+      }
+    }
+
+    let fetch_calls = Arc::new(AtomicUsize::new(0));
+    let partial_calls = Arc::new(AtomicUsize::new(0));
+    let cache = CachingFetcher::new(PartialCountingFetcher {
+      fetch_calls: Arc::clone(&fetch_calls),
+      partial_calls: Arc::clone(&partial_calls),
+    });
+
+    let url = "http://example.com/partial-cache";
+    let partial = cache
+      .fetch_partial_with_context(FetchContextKind::Image, url, 7)
+      .expect("partial fetch");
+    assert_eq!(partial.bytes, b"partial");
+    assert_eq!(partial_calls.load(Ordering::SeqCst), 1);
+
+    let full = cache
+      .fetch_with_context(FetchContextKind::Image, url)
+      .expect("full fetch");
+    assert_eq!(full.bytes, b"full-body");
+    assert_eq!(
+      fetch_calls.load(Ordering::SeqCst),
+      1,
+      "full fetch should still hit inner fetcher after partial fetch"
+    );
+  }
+
   #[derive(Clone, Debug)]
   struct RecordedFetchRequestCall {
     destination: FetchDestination,
@@ -12681,6 +12918,178 @@ mod tests {
     assert_eq!(third.bytes, b"fresh");
 
     assert_eq!(fetcher.calls().len(), 3, "fetcher should be called 3 times");
+  }
+
+  #[test]
+  fn caching_fetcher_does_not_poison_successful_entry_on_http_error() {
+    let fetcher = ScriptedFetcher::new(vec![
+      MockResponse {
+        status: 200,
+        body: b"cached".to_vec(),
+        etag: Some("etag1".to_string()),
+        last_modified: None,
+        cache_policy: None,
+      },
+      MockResponse {
+        status: 403,
+        body: b"forbidden".to_vec(),
+        etag: None,
+        last_modified: None,
+        cache_policy: None,
+      },
+      MockResponse {
+        status: 200,
+        body: b"fresh".to_vec(),
+        etag: Some("etag2".to_string()),
+        last_modified: None,
+        cache_policy: None,
+      },
+    ]);
+
+    let cache = CachingFetcher::new(fetcher.clone());
+    let url = "http://example.com/resource";
+
+    let first = cache.fetch(url).expect("initial fetch");
+    assert_eq!(first.bytes, b"cached");
+
+    let second = cache
+      .fetch(url)
+      .expect("http error refresh should fall back");
+    assert_eq!(
+      second.bytes, b"cached",
+      "expected cached bytes to be served instead of 403 body"
+    );
+
+    let third = cache.fetch(url).expect("fresh fetch should update cache");
+    assert_eq!(third.bytes, b"fresh");
+
+    let calls = fetcher.calls();
+    assert_eq!(calls.len(), 3, "expected three network attempts");
+    assert_eq!(calls[1].etag.as_deref(), Some("etag1"));
+    assert_eq!(
+      calls[2].etag.as_deref(),
+      Some("etag1"),
+      "403 refresh should not overwrite cached validators"
+    );
+  }
+
+  #[test]
+  fn caching_fetcher_fetch_with_request_does_not_poison_successful_entry_on_http_error() {
+    #[derive(Clone, Debug)]
+    struct RecordedRequestCall {
+      etag: Option<String>,
+      last_modified: Option<String>,
+    }
+
+    #[derive(Clone, Debug)]
+    struct RequestResponse {
+      status: u16,
+      body: Vec<u8>,
+      etag: Option<String>,
+      last_modified: Option<String>,
+    }
+
+    #[derive(Clone)]
+    struct RequestScriptedFetcher {
+      responses: Arc<Mutex<VecDeque<RequestResponse>>>,
+      calls: Arc<Mutex<Vec<RecordedRequestCall>>>,
+    }
+
+    impl RequestScriptedFetcher {
+      fn new(responses: Vec<RequestResponse>) -> Self {
+        Self {
+          responses: Arc::new(Mutex::new(VecDeque::from(responses))),
+          calls: Arc::new(Mutex::new(Vec::new())),
+        }
+      }
+
+      fn next_response(&self, url: &str) -> Result<FetchedResource> {
+        let mut responses = self.responses.lock().unwrap();
+        let resp = responses
+          .pop_front()
+          .expect("scripted fetcher ran out of responses");
+        let mut resource = FetchedResource::new(resp.body, Some("text/plain".to_string()));
+        resource.status = Some(resp.status);
+        resource.final_url = Some(url.to_string());
+        resource.etag = resp.etag;
+        resource.last_modified = resp.last_modified;
+        Ok(resource)
+      }
+
+      fn calls(&self) -> Vec<RecordedRequestCall> {
+        self.calls.lock().unwrap().clone()
+      }
+    }
+
+    impl ResourceFetcher for RequestScriptedFetcher {
+      fn fetch(&self, _url: &str) -> Result<FetchedResource> {
+        panic!("fetch() should not be called by fetch_with_request tests");
+      }
+
+      fn fetch_with_request(&self, req: FetchRequest<'_>) -> Result<FetchedResource> {
+        self.calls.lock().unwrap().push(RecordedRequestCall {
+          etag: None,
+          last_modified: None,
+        });
+        self.next_response(req.url)
+      }
+
+      fn fetch_with_request_and_validation(
+        &self,
+        req: FetchRequest<'_>,
+        etag: Option<&str>,
+        last_modified: Option<&str>,
+      ) -> Result<FetchedResource> {
+        self.calls.lock().unwrap().push(RecordedRequestCall {
+          etag: etag.map(|s| s.to_string()),
+          last_modified: last_modified.map(|s| s.to_string()),
+        });
+        self.next_response(req.url)
+      }
+    }
+
+    let fetcher = RequestScriptedFetcher::new(vec![
+      RequestResponse {
+        status: 200,
+        body: b"cached".to_vec(),
+        etag: Some("etag1".to_string()),
+        last_modified: None,
+      },
+      RequestResponse {
+        status: 403,
+        body: b"forbidden".to_vec(),
+        etag: None,
+        last_modified: None,
+      },
+      RequestResponse {
+        status: 200,
+        body: b"fresh".to_vec(),
+        etag: Some("etag2".to_string()),
+        last_modified: None,
+      },
+    ]);
+
+    let cache = CachingFetcher::new(fetcher.clone());
+    let url = "http://example.com/request";
+    let req = FetchRequest::new(url, FetchDestination::Style);
+
+    let first = cache.fetch_with_request(req).expect("seed fetch");
+    assert_eq!(first.bytes, b"cached");
+
+    let second = cache.fetch_with_request(req).expect("fallback fetch");
+    assert_eq!(second.bytes, b"cached");
+
+    let third = cache.fetch_with_request(req).expect("fresh fetch");
+    assert_eq!(third.bytes, b"fresh");
+
+    let calls = fetcher.calls();
+    assert_eq!(calls.len(), 3);
+    assert_eq!(calls[1].etag.as_deref(), Some("etag1"));
+    assert_eq!(
+      calls[2].etag.as_deref(),
+      Some("etag1"),
+      "403 refresh should not overwrite cached validators"
+    );
   }
 
   #[test]

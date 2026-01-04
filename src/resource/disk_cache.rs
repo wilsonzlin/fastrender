@@ -1031,20 +1031,16 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
       }
 
       let stored_time = secs_to_system_time(meta.stored_at).unwrap_or(SystemTime::now());
-      let http_cache = meta
-        .cache
-        .as_ref()
-        .and_then(|c| c.to_http())
-        .or_else(|| {
-          Some(CachedHttpMetadata {
-            stored_at: stored_time,
-            max_age: None,
-            expires: None,
-            no_cache: false,
-            no_store: true,
-            must_revalidate: false,
-          })
-        });
+      let http_cache = meta.cache.as_ref().and_then(|c| c.to_http()).or_else(|| {
+        Some(CachedHttpMetadata {
+          stored_at: stored_time,
+          max_age: None,
+          expires: None,
+          no_cache: false,
+          no_store: true,
+          must_revalidate: false,
+        })
+      });
 
       return SnapshotRead::Hit(CachedSnapshot {
         value: super::CacheValue::Error(Error::Resource(err)),
@@ -1235,8 +1231,9 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
       target: canonical.to_string(),
     };
     match serde_json::to_vec(&alias) {
-      Ok(serialized) if !self.disk_writeback_disabled_for_len(serialized.len())
-        && fs::write(&tmp, &serialized).is_ok() =>
+      Ok(serialized)
+        if !self.disk_writeback_disabled_for_len(serialized.len())
+          && fs::write(&tmp, &serialized).is_ok() =>
       {
         let _ = fs::rename(&tmp, &alias_path);
       }
@@ -1980,6 +1977,24 @@ impl<F: ResourceFetcher> DiskCachingFetcher<F> {
               false,
             )
           }
+        } else if res.status.is_some_and(|code| code >= 400)
+          && plan
+            .cached
+            .as_ref()
+            .is_some_and(|snapshot| snapshot.is_successful_http_response())
+        {
+          if let Some(snapshot) = plan.cached.as_ref() {
+            super::record_cache_stale_hit();
+            let fallback = snapshot.value.as_result();
+            if let Ok(ref ok) = fallback {
+              super::record_resource_cache_bytes(ok.bytes.len());
+            }
+            let is_ok = fallback.is_ok();
+            (fallback, is_ok)
+          } else {
+            super::record_cache_miss();
+            (Ok(res), false)
+          }
         } else if res
           .status
           .map(super::is_transient_http_status)
@@ -2703,7 +2718,8 @@ mod tests {
       size: DISK_WRITEBACK_SMALL_ENTRY_MAX_BYTES + 1,
     };
     let disk_again = DiskCachingFetcher::new(second_fetcher, tmp.path());
-    let _ = render_control::with_deadline(Some(&deadline), || disk_again.fetch(url)).expect("fetch");
+    let _ =
+      render_control::with_deadline(Some(&deadline), || disk_again.fetch(url)).expect("fetch");
     assert_eq!(
       counter.load(Ordering::SeqCst),
       2,
@@ -3410,12 +3426,8 @@ mod tests {
     assert_eq!(first.status, Some(503));
     assert_eq!(counter.load(Ordering::SeqCst), 1);
 
-    let offline = DiskCachingFetcher::with_configs(
-      PanicFetcher,
-      tmp.path(),
-      memory_config,
-      disk_config,
-    );
+    let offline =
+      DiskCachingFetcher::with_configs(PanicFetcher, tmp.path(), memory_config, disk_config);
     let deadline = render_control::RenderDeadline::new(Some(Duration::from_secs(1)), None);
     let cached = render_control::with_deadline(Some(&deadline), || offline.fetch(url))
       .expect("disk hit under deadline");
@@ -3640,6 +3652,67 @@ mod tests {
     let meta: StoredMetadata = serde_json::from_slice(&meta_bytes).expect("valid meta");
     assert_eq!(meta.etag.as_deref(), Some("etag2"));
     assert_eq!(meta.last_modified.as_deref(), Some("lm2"));
+  }
+
+  #[test]
+  fn disk_cache_does_not_poison_successful_entry_on_http_error_refresh() {
+    let tmp = tempfile::tempdir().unwrap();
+    let fetcher = ScriptedFetcher::new(vec![
+      MockResponse {
+        status: 200,
+        body: b"cached".to_vec(),
+        etag: Some("etag1".to_string()),
+        last_modified: None,
+        cache_policy: Some(HttpCachePolicy {
+          max_age: Some(3600),
+          ..Default::default()
+        }),
+      },
+      MockResponse {
+        status: 403,
+        body: b"forbidden".to_vec(),
+        etag: None,
+        last_modified: None,
+        cache_policy: None,
+      },
+    ]);
+
+    // Force staleness so the second fetch attempts a refresh.
+    let disk = DiskCachingFetcher::with_configs(
+      fetcher.clone(),
+      tmp.path(),
+      CachingFetcherConfig {
+        honor_http_cache_freshness: true,
+        ..CachingFetcherConfig::default()
+      },
+      DiskCacheConfig {
+        max_bytes: 0,
+        max_age: Some(Duration::from_secs(0)),
+        ..DiskCacheConfig::default()
+      },
+    );
+    let url = "https://example.com/resource";
+
+    let first = disk.fetch(url).expect("seed fetch");
+    assert_eq!(first.bytes, b"cached");
+
+    let second = disk.fetch(url).expect("refresh fetch");
+    assert_eq!(
+      second.bytes, b"cached",
+      "expected cached bytes to be served instead of 403 body"
+    );
+
+    assert_eq!(
+      fetcher.calls().len(),
+      2,
+      "expected both the seed and refresh network requests to run"
+    );
+
+    // A fresh disk cache instance should still serve the original bytes even if the refresh failed
+    // with an HTTP error status.
+    let offline = DiskCachingFetcher::new(PanicFetcher, tmp.path());
+    let cached = offline.fetch(url).expect("disk cache hit");
+    assert_eq!(cached.bytes, b"cached");
   }
 
   #[test]
