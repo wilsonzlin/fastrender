@@ -14738,6 +14738,7 @@ mod tests {
   fn display_webkit_box_sets_flag_and_box_orient_parses() {
     let mut styles = ComputedStyle::default();
     let parent = ComputedStyle::default();
+    assert_eq!(styles.webkit_box_orient, WebkitBoxOrient::Horizontal);
 
     let decl = Declaration {
       property: "display".into(),
@@ -14759,6 +14760,26 @@ mod tests {
     };
     apply_declaration(&mut styles, &decl, &parent, 16.0, 16.0);
     assert_eq!(styles.webkit_box_orient, WebkitBoxOrient::Vertical);
+  }
+
+  #[test]
+  fn parses_webkit_box_clamp_pattern_from_declarations() {
+    let decls = parse_declarations(
+      "display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;",
+    );
+    assert_eq!(decls.len(), 3);
+
+    let mut styles = ComputedStyle::default();
+    let parent = ComputedStyle::default();
+    for decl in &decls {
+      apply_declaration(&mut styles, decl, &parent, 16.0, 16.0);
+    }
+
+    assert_eq!(styles.display, Display::Block);
+    assert!(styles.display_is_webkit_box);
+    assert_eq!(styles.webkit_box_orient, WebkitBoxOrient::Vertical);
+    assert_eq!(styles.line_clamp, Some(2));
+    assert_eq!(styles.line_clamp_source, LineClampSource::Webkit);
   }
 
   #[test]
