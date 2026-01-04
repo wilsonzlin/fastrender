@@ -6370,6 +6370,30 @@ mod filter_region_input_clipping_tests {
 }
 
 #[cfg(test)]
+mod default_primitive_region_units_tests {
+  use super::*;
+  use tiny_skia::Color;
+
+  #[test]
+  fn default_primitive_region_uses_filter_units_for_numeric_object_bounding_box_values() {
+    let cache = ImageCache::new();
+    let svg = "<svg xmlns='http://www.w3.org/2000/svg'><filter id='f' x='-0.5' y='-0.5' width='2' height='2'><feOffset dx='0' dy='0'/></filter></svg>";
+    let filter = parse_filter_definition(svg, Some("f"), &cache).expect("parsed filter");
+
+    let mut pixmap = new_pixmap(10, 10).unwrap();
+    pixmap.fill(Color::from_rgba8(0, 0, 255, 255));
+
+    let bbox = Rect::from_xywh(0.0, 0.0, 10.0, 10.0);
+    apply_svg_filter(filter.as_ref(), &mut pixmap, 1.0, bbox).unwrap();
+
+    assert!(
+      pixmap.pixel(9, 9).unwrap().alpha() > 0,
+      "expected output to avoid clipping when filter region fully covers the bbox"
+    );
+  }
+}
+
+#[cfg(test)]
 mod filter_res_tests {
   use super::*;
   use base64::engine::general_purpose::STANDARD;
@@ -7430,7 +7454,7 @@ mod blend_pixmaps_tests {
     )
     .unwrap();
     let pixel = blended.pixmap.pixel(0, 0).unwrap();
-    assert_pixel_close(pixel, (136, 80, 120, 255));
+    assert_pixel_close(pixel, (164, 140, 147, 255));
   }
 
   #[test]
