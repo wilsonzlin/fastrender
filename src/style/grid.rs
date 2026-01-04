@@ -606,7 +606,10 @@ impl<'a> TrackListParser<'a> {
 
   fn starts_with_ident(&self, ident: &str) -> bool {
     let rem = self.remaining();
-    rem.len() >= ident.len() && rem[..ident.len()].eq_ignore_ascii_case(ident)
+    rem
+      .get(..ident.len())
+      .map(|prefix| prefix.eq_ignore_ascii_case(ident))
+      .unwrap_or(false)
   }
 
   fn consume_bracketed_names(&mut self) -> Option<Vec<String>> {
@@ -1199,5 +1202,11 @@ mod tests {
     assert!(parsed.areas.as_ref().unwrap().is_empty());
     assert!(parsed.row_tracks.as_ref().unwrap().0.is_empty());
     assert!(parsed.column_tracks.as_ref().unwrap().0.is_empty());
+  }
+
+  #[test]
+  fn parse_track_list_does_not_panic_on_unicode_prefix() {
+    let parsed = parse_track_list("€€€repeat(2, 1fr)");
+    assert!(parsed.tracks.is_empty());
   }
 }

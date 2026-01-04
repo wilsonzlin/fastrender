@@ -327,13 +327,20 @@ pub fn normalize_page_name(raw: &str) -> Option<String> {
   // Fallback: case-insensitive scheme + www stripping for bare hosts or host+path strings.
   let mut without_scheme = trimmed;
   for scheme in ["https://", "http://"] {
-    if trimmed.len() >= scheme.len() && trimmed[..scheme.len()].eq_ignore_ascii_case(scheme) {
+    if trimmed
+      .get(..scheme.len())
+      .map(|prefix| prefix.eq_ignore_ascii_case(scheme))
+      .unwrap_or(false)
+    {
       without_scheme = &trimmed[scheme.len()..];
       break;
     }
   }
 
-  let without_www = if without_scheme.len() >= 4 && without_scheme[..4].eq_ignore_ascii_case("www.")
+  let without_www = if without_scheme
+    .get(..4)
+    .map(|prefix| prefix.eq_ignore_ascii_case("www."))
+    .unwrap_or(false)
   {
     &without_scheme[4..]
   } else {
@@ -383,7 +390,11 @@ pub fn url_to_filename(url: &str) -> String {
   // Fallback: remove common schemes case-insensitively and lowercase only the hostname portion.
   let mut trimmed = trimmed;
   for scheme in ["https://", "http://"] {
-    if trimmed.len() >= scheme.len() && trimmed[..scheme.len()].eq_ignore_ascii_case(scheme) {
+    if trimmed
+      .get(..scheme.len())
+      .map(|prefix| prefix.eq_ignore_ascii_case(scheme))
+      .unwrap_or(false)
+    {
       trimmed = &trimmed[scheme.len()..];
       break;
     }
@@ -1717,7 +1728,11 @@ fn policy_error(reason: impl Into<String>) -> Error {
 /// pass a full header value. Case-insensitive and trims surrounding whitespace after the prefix.
 pub fn normalize_user_agent_for_log(ua: &str) -> &str {
   const PREFIX: &str = "user-agent:";
-  if ua.len() >= PREFIX.len() && ua[..PREFIX.len()].eq_ignore_ascii_case(PREFIX) {
+  if ua
+    .get(..PREFIX.len())
+    .map(|prefix| prefix.eq_ignore_ascii_case(PREFIX))
+    .unwrap_or(false)
+  {
     let trimmed = ua[PREFIX.len()..].trim();
     if !trimmed.is_empty() {
       return trimmed;
@@ -10243,6 +10258,22 @@ mod tests {
       url_to_filename("https://example.com/foo/"),
       "example.com_foo"
     );
+  }
+
+  #[test]
+  fn normalize_page_name_does_not_panic_on_non_utf8_boundary_prefixes() {
+    assert_eq!(normalize_page_name("€€€foobar").as_deref(), Some("___foobar"));
+  }
+
+  #[test]
+  fn url_to_filename_does_not_panic_on_non_utf8_boundary_prefixes() {
+    assert_eq!(url_to_filename("€€€foobar#frag"), "___foobar");
+  }
+
+  #[test]
+  fn normalize_user_agent_for_log_does_not_panic_on_non_utf8_boundary_prefixes() {
+    let ua = "€€€€foobar";
+    assert_eq!(normalize_user_agent_for_log(ua), ua);
   }
 
   #[test]
