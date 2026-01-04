@@ -126,6 +126,16 @@ fn diff_snapshots_links_render_fixtures_layout_pngs() {
     .expect("run diff_snapshots");
   assert!(status.success(), "expected success, got {:?}", status.code());
 
+  let html = fs::read_to_string(&report_html).expect("read report html");
+  assert!(
+    html.contains(r#"<a href="before/foo.png">before.png</a>"#),
+    "expected before.png HTML link"
+  );
+  assert!(
+    html.contains(r#"<a href="after/foo.png">after.png</a>"#),
+    "expected after.png HTML link"
+  );
+
   let report: Value =
     serde_json::from_str(&fs::read_to_string(&report_json).expect("read report"))
       .expect("parse report json");

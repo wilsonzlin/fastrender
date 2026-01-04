@@ -1282,10 +1282,10 @@ fn write_html_report(report: &SnapshotDiffReport, path: &Path) -> Result<(), Str
     };
     let mut summary_bits = Vec::new();
     if let Some(counts) = entry.summary.as_ref().map(|s| &s.counts) {
-      summary_bits.push(format!(
+      summary_bits.push(escape_html(&format!(
         "Δdom {:+}, Δboxes {:+}, Δfragments {:+}",
         counts.dom.delta, counts.boxes.delta, counts.fragments.delta
-      ));
+      )));
     }
     if entry.before_png.is_some() || entry.after_png.is_some() {
       let mut parts = Vec::new();
@@ -1305,7 +1305,7 @@ fn write_html_report(report: &SnapshotDiffReport, path: &Path) -> Result<(), Str
       open = open_attr,
       name = escape_html(&entry.name),
       status = escape_html(entry.status.label()),
-      summary = escape_html(&summary_bits.join(" | ")),
+      summary = summary_bits.join(" | "),
     ));
 
     entries_html.push_str("<div class=\"paths\">");
