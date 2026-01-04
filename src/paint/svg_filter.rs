@@ -4423,6 +4423,22 @@ fn apply_displacement_map(
   };
   let width = primary.width() as usize;
 
+  let use_linear = matches!(
+    color_interpolation_filters,
+    ColorInterpolationFilters::LinearRGB
+  );
+  let mut primary_linear;
+  let mut map_linear;
+  let (primary, map) = if use_linear {
+    primary_linear = primary.clone();
+    map_linear = map.clone();
+    reencode_pixmap_to_linear_rgb(&mut primary_linear);
+    reencode_pixmap_to_linear_rgb(&mut map_linear);
+    (&primary_linear, &map_linear)
+  } else {
+    (primary, map)
+  };
+
   for (idx, dst) in out.pixels_mut().iter_mut().enumerate() {
     if idx % FILTER_DEADLINE_STRIDE == 0 {
       check_active(RenderStage::Paint)?;
@@ -4431,7 +4447,7 @@ fn apply_displacement_map(
     let x = (idx % width) as u32;
 
     let map_sample = sample_premultiplied(map, x as f32, y as f32);
-    let map_color = sample_to_color_space(map_sample, color_interpolation_filters);
+    let map_color = unpremultiply_sample(map_sample);
     let channel_value_x = channel_value(&map_color, x_channel);
     let channel_value_y = channel_value(&map_color, y_channel);
     let dx = (channel_value_x - 0.5) * scale;
@@ -4448,13 +4464,14 @@ fn apply_displacement_map(
     .unwrap_or(PremultipliedColorU8::TRANSPARENT);
   }
 
+  if use_linear {
+    reencode_pixmap_to_srgb(&mut out);
+  }
+
   Ok(Some(out))
 }
 
-fn sample_to_color_space(
-  sample: [f32; 4],
-  color_space: ColorInterpolationFilters,
-) -> UnpremultipliedColor {
+fn unpremultiply_sample(sample: [f32; 4]) -> UnpremultipliedColor {
   let alpha = clamp01(sample[3]);
   if alpha <= 0.0 {
     return UnpremultipliedColor {
@@ -4464,17 +4481,12 @@ fn sample_to_color_space(
       a: 0.0,
     };
   }
-  let mut color = UnpremultipliedColor {
+  let color = UnpremultipliedColor {
     r: clamp01(sample[0] / alpha),
     g: clamp01(sample[1] / alpha),
     b: clamp01(sample[2] / alpha),
     a: alpha,
   };
-  if matches!(color_space, ColorInterpolationFilters::LinearRGB) {
-    color.r = srgb_to_linear(color.r);
-    color.g = srgb_to_linear(color.g);
-    color.b = srgb_to_linear(color.b);
-  }
   color
 }
 
@@ -5339,6 +5351,73 @@ mod tests {
       "expected timeout, got {result:?}"
     );
     assert!(calls.load(Ordering::SeqCst) >= 2);
+  }
+
+  #[test]
+  fn displacement_map_interpolates_in_color_space() {
+    let mut primary = new_pixmap(2, 2).unwrap();
+    let pixels = [
+      premul(0, 0, 0, 255),
+      premul(255, 255, 255, 255),
+      premul(0, 0, 0, 255),
+      premul(255, 255, 255, 255),
+    ];
+    for (dst, src) in primary.pixels_mut().iter_mut().zip(pixels.iter()) {
+      *dst = *src;
+    }
+
+    let mut map = new_pixmap(2, 2).unwrap();
+    // Displace the X coordinate by 0.5px (channel=1.0), while keeping the Y displacement within
+    // bounds even after converting to linearRGB.
+    for px in map.pixels_mut() {
+      *px = premul(255, 188, 0, 255);
+    }
+
+    let srgb = apply_displacement_map(
+      &primary,
+      &map,
+      1.0,
+      ChannelSelector::R,
+      ChannelSelector::G,
+      ColorInterpolationFilters::SRGB,
+    )
+    .unwrap()
+    .unwrap();
+    let linear = apply_displacement_map(
+      &primary,
+      &map,
+      1.0,
+      ChannelSelector::R,
+      ChannelSelector::G,
+      ColorInterpolationFilters::LinearRGB,
+    )
+    .unwrap()
+    .unwrap();
+
+    let srgb_px = srgb.pixel(0, 0).unwrap();
+    let linear_px = linear.pixel(0, 0).unwrap();
+    assert_eq!(srgb_px.alpha(), 255);
+    assert_eq!(linear_px.alpha(), 255);
+
+    let within1 = |actual: u8, expected: u8| (actual as i32 - expected as i32).abs() <= 1;
+    assert!(
+      within1(srgb_px.red(), 128) && within1(srgb_px.green(), 128) && within1(srgb_px.blue(), 128),
+      "expected ~128 gray in sRGB, got ({},{},{},{})",
+      srgb_px.red(),
+      srgb_px.green(),
+      srgb_px.blue(),
+      srgb_px.alpha()
+    );
+    assert!(
+      within1(linear_px.red(), 188)
+        && within1(linear_px.green(), 188)
+        && within1(linear_px.blue(), 188),
+      "expected ~188 gray in linearRGB, got ({},{},{},{})",
+      linear_px.red(),
+      linear_px.green(),
+      linear_px.blue(),
+      linear_px.alpha()
+    );
   }
 
   #[test]
