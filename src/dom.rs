@@ -2853,7 +2853,14 @@ pub fn composed_dom_snapshot_with_ids_and_assignment(
         .iter()
         .find(|child| matches!(child.node_type, DomNodeType::ShadowRoot { .. }))
       {
-        return vec![shadow_root as *const DomNode];
+        // In the composed tree, the shadow root's children replace the host's light DOM children.
+        // The `ShadowRoot` node itself is an internal representation detail of the parsed DOM and
+        // is not exposed as part of the composed snapshot.
+        return shadow_root
+          .children
+          .iter()
+          .map(|child| child as *const DomNode)
+          .collect();
       }
     }
 
@@ -2898,17 +2905,17 @@ pub fn composed_dom_snapshot_with_ids_and_assignment(
   let mut deadline_counter = 0usize;
 
   let root_ptr = root as *const DomNode;
-    let mut out_root = root.clone_without_children();
-    let root_children = composed_children_for(
-      root,
-      root_ptr,
-      ids,
-      &id_to_node,
-      assignment,
-      &mut out_root,
-    );
-    let mut stack = vec![Frame {
-      out: out_root,
+  let mut out_root = root.clone_without_children();
+  let root_children = composed_children_for(
+    root,
+    root_ptr,
+    ids,
+    &id_to_node,
+    assignment,
+    &mut out_root,
+  );
+  let mut stack = vec![Frame {
+    out: out_root,
     children: root_children,
     next_child: 0,
   }];
@@ -2962,7 +2969,7 @@ pub fn composed_dom_snapshot_with_ids_and_assignment(
 /// Create a composed-tree view of the DOM for debugging and tooling.
 ///
 /// The returned tree represents the DOM as it would appear after:
-/// - Shadow DOM: shadow roots replace the host's light DOM children.
+/// - Shadow DOM: a shadow host's children are replaced by its shadow root's children.
 /// - Slotting: `<slot>` elements expand to their assigned nodes (or fallback children when empty).
 ///
 /// This is a snapshot-only transformation; it does not mutate the input DOM and does not require
