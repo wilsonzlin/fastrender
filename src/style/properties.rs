@@ -1557,14 +1557,13 @@ fn parse_time_ms(raw: &str) -> Option<f32> {
   if trimmed.is_empty() {
     return None;
   }
-  let lower = trimmed.to_ascii_lowercase();
-  if let Some(num) = lower.strip_suffix("ms") {
+  if let Some(num) = strip_suffix_ignore_ascii_case(trimmed, "ms") {
     return num.trim().parse::<f32>().ok();
   }
-  if let Some(num) = lower.strip_suffix('s') {
+  if let Some(num) = strip_suffix_ignore_ascii_case(trimmed, "s") {
     return num.trim().parse::<f32>().ok().map(|v| v * 1000.0);
   }
-  if lower == "0" {
+  if trimmed == "0" {
     return Some(0.0);
   }
   None
@@ -1733,49 +1732,57 @@ fn parse_transition_time_list(raw: &str) -> Vec<f32> {
 }
 
 fn parse_transition_timing_function(raw: &str) -> Option<TransitionTimingFunction> {
-  let lower = raw.trim().to_ascii_lowercase();
-  match lower.as_str() {
-    "ease" => return Some(TransitionTimingFunction::Ease),
-    "linear" => return Some(TransitionTimingFunction::Linear),
-    "ease-in" => return Some(TransitionTimingFunction::EaseIn),
-    "ease-out" => return Some(TransitionTimingFunction::EaseOut),
-    "ease-in-out" => return Some(TransitionTimingFunction::EaseInOut),
-    "step-start" => return Some(TransitionTimingFunction::Steps(1, StepPosition::Start)),
-    "step-end" => return Some(TransitionTimingFunction::Steps(1, StepPosition::End)),
-    _ => {}
+  let trimmed = raw.trim();
+  if trimmed.is_empty() {
+    return None;
   }
 
-  if lower.starts_with("cubic-bezier") {
-    if let Some(args) = lower
-      .strip_prefix("cubic-bezier(")
-      .and_then(|s| s.strip_suffix(')'))
-    {
-      let nums: Vec<f32> = args
-        .split(',')
-        .filter_map(|n| n.trim().parse::<f32>().ok())
-        .collect();
-      if nums.len() == 4 {
-        return Some(TransitionTimingFunction::CubicBezier(
-          nums[0], nums[1], nums[2], nums[3],
-        ));
-      }
+  if trimmed.eq_ignore_ascii_case("ease") {
+    return Some(TransitionTimingFunction::Ease);
+  }
+  if trimmed.eq_ignore_ascii_case("linear") {
+    return Some(TransitionTimingFunction::Linear);
+  }
+  if trimmed.eq_ignore_ascii_case("ease-in") {
+    return Some(TransitionTimingFunction::EaseIn);
+  }
+  if trimmed.eq_ignore_ascii_case("ease-out") {
+    return Some(TransitionTimingFunction::EaseOut);
+  }
+  if trimmed.eq_ignore_ascii_case("ease-in-out") {
+    return Some(TransitionTimingFunction::EaseInOut);
+  }
+  if trimmed.eq_ignore_ascii_case("step-start") {
+    return Some(TransitionTimingFunction::Steps(1, StepPosition::Start));
+  }
+  if trimmed.eq_ignore_ascii_case("step-end") {
+    return Some(TransitionTimingFunction::Steps(1, StepPosition::End));
+  }
+
+  if starts_with_ignore_ascii_case(trimmed, "cubic-bezier(") && trimmed.ends_with(')') {
+    let args = &trimmed["cubic-bezier(".len()..trimmed.len() - 1];
+    let nums: Vec<f32> = args
+      .split(',')
+      .filter_map(|n| n.trim().parse::<f32>().ok())
+      .collect();
+    if nums.len() == 4 {
+      return Some(TransitionTimingFunction::CubicBezier(
+        nums[0], nums[1], nums[2], nums[3],
+      ));
     }
+    return None;
   }
 
-  if lower.starts_with("steps(") {
-    if let Some(args) = lower
-      .strip_prefix("steps(")
-      .and_then(|s| s.strip_suffix(')'))
-    {
-      let mut parts = args.split(',').map(|p| p.trim());
-      if let Some(count) = parts.next().and_then(|p| p.parse::<u32>().ok()) {
-        let position = match parts.next().map(|p| p.to_ascii_lowercase()) {
-          Some(p) if p == "start" => StepPosition::Start,
-          Some(p) if p == "end" => StepPosition::End,
-          _ => StepPosition::End,
-        };
-        return Some(TransitionTimingFunction::Steps(count, position));
-      }
+  if starts_with_ignore_ascii_case(trimmed, "steps(") && trimmed.ends_with(')') {
+    let args = &trimmed["steps(".len()..trimmed.len() - 1];
+    let mut parts = args.split(',').map(|p| p.trim());
+    if let Some(count) = parts.next().and_then(|p| p.parse::<u32>().ok()) {
+      let position = match parts.next() {
+        Some(p) if p.eq_ignore_ascii_case("start") => StepPosition::Start,
+        Some(p) if p.eq_ignore_ascii_case("end") => StepPosition::End,
+        _ => StepPosition::End,
+      };
+      return Some(TransitionTimingFunction::Steps(count, position));
     }
   }
 
