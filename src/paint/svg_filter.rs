@@ -5661,12 +5661,18 @@ mod tests {
     filter.refresh_fingerprint();
 
     let bbox = Rect::from_xywh(0.0, 0.0, 2.0, 2.0);
+    let alloc_recorder = crate::paint::pixmap::NewPixmapAllocRecorder::start();
     let result = apply_svg_filter_with_cache(&filter, &mut pixmap, 1.0, bbox, None);
     assert!(
       matches!(result, Ok(())),
       "expected recursion limit to noop, got {result:?}"
     );
     assert_eq!(pixmap.data(), before.as_slice());
+    let allocs = alloc_recorder.take();
+    assert!(
+      allocs.is_empty(),
+      "expected recursion limit to short-circuit without allocating new pixmaps, got {allocs:?}"
+    );
     let stats = take_paint_diagnostics().expect("diagnostics enabled");
     _reset.diagnostics_taken = true;
     assert_eq!(stats.svg_filter_recursion_limit_hits, 1);
