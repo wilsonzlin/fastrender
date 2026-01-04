@@ -153,8 +153,9 @@ primitives.
   back to 8-bit at primitive outputs.
 - **Conversions at primitive boundaries:** linearRGB primitives convert in/out of linear for their
   computation instead of keeping a float/linear surface across multiple primitives.
-- **`color-interpolation-filters` coverage:** all currently-supported primitives apply explicit
-  sRGB <-> linearRGB conversion for color-space-dependent operations.
+- **Partial coverage of `color-interpolation-filters`:** no known gaps for currently-supported
+  primitives (all apply explicit sRGB <-> linearRGB conversion for color-space-dependent
+  operations).
 
 ## Regression tests
 
