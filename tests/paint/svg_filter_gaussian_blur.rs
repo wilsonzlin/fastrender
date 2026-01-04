@@ -4,6 +4,10 @@ use fastrender::paint::svg_filter::{
   apply_svg_filter, parse_svg_filter_from_svg_document, ColorInterpolationFilters, FilterInput,
   FilterPrimitive, FilterStep, SvgFilter, SvgFilterRegion, SvgFilterUnits, SvgLength,
 };
+use fastrender::debug::runtime;
+use fastrender::debug::runtime::RuntimeToggles;
+use std::collections::HashMap;
+use std::sync::Arc;
 use tiny_skia::{Pixmap, PremultipliedColorU8};
 
 fn parse_blur(std_deviation: &str) -> (f32, f32) {
@@ -118,25 +122,33 @@ fn gaussian_blur_resolves_single_value_per_axis_in_object_bbox_units() {
     fingerprint: 0,
   };
   filter.refresh_fingerprint();
-  apply_svg_filter(&filter, &mut pixmap, 1.0, bbox).unwrap();
+  // Lock blur algorithm selection to keep the bounds check deterministic regardless of host env.
+  // This test is about `primitiveUnits="objectBoundingBox"` scaling, not blur implementation details.
+  runtime::with_thread_runtime_toggles(
+    Arc::new(RuntimeToggles::from_map(HashMap::from([(
+      "FASTR_FAST_BLUR".to_string(),
+      "1".to_string(),
+    )]))),
+    || apply_svg_filter(&filter, &mut pixmap, 1.0, bbox).unwrap(),
+  );
 
   let bounds = opaque_bounds(&pixmap).expect("blurred content should be visible");
   let (min_x, min_y, width, height) = bounds;
 
   assert!(
-    (min_x as i32 - 15).abs() <= 1,
-    "expected blur to expand more along x (min_x={min_x})"
+    (min_x as i32 - 18).abs() <= 1,
+    "expected blur to expand more along x (min_x={min_x})",
   );
   assert!(
-    (min_y as i32 - 5).abs() <= 1,
-    "expected blur to expand based on bbox height (min_y={min_y})"
+    (min_y as i32 - 7).abs() <= 1,
+    "expected blur to expand based on bbox height (min_y={min_y})",
   );
   assert!(
-    (width as i32 - 70).abs() <= 2,
-    "expected horizontal spread to reflect bbox width (width={width})"
+    (width as i32 - 64).abs() <= 2,
+    "expected horizontal spread to reflect bbox width (width={width})",
   );
   assert!(
-    (height as i32 - 40).abs() <= 2,
-    "expected vertical spread to reflect bbox height (height={height})"
+    (height as i32 - 36).abs() <= 2,
+    "expected vertical spread to reflect bbox height (height={height})",
   );
 }

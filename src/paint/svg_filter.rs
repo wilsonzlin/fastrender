@@ -6170,6 +6170,26 @@ mod tests {
   }
 
   #[test]
+  fn source_alpha_produces_black_with_source_alpha() {
+    let mut pixmap = new_pixmap(1, 1).unwrap();
+    pixmap.pixels_mut()[0] = ColorU8::from_rgba(255, 0, 0, 128).premultiply();
+
+    let prim = FilterPrimitive::ColorMatrix {
+      input: FilterInput::SourceAlpha,
+      kind: ColorMatrixKind::Matrix([
+        1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+        1.0, 0.0,
+      ]),
+    };
+    let out = apply_for_test(&prim, &pixmap);
+    let px = out.pixmap.pixels()[0];
+    assert_eq!(
+      (px.red(), px.green(), px.blue(), px.alpha()),
+      (0, 0, 0, 128)
+    );
+  }
+
+  #[test]
   fn missing_input_does_not_skip_composite_and_clips_to_primitive_region() {
     let cache = ImageCache::new();
     let svg = "<svg xmlns='http://www.w3.org/2000/svg'><filter id='f' filterUnits='userSpaceOnUse' primitiveUnits='userSpaceOnUse' x='0' y='0' width='4' height='4'><feComposite in='missing' in2='SourceGraphic' operator='over' x='0' y='0' width='2' height='2'/></filter></svg>";
@@ -7425,13 +7445,83 @@ mod tests {
       .descendants()
       .find(|n| n.has_tag_name("feTurbulence"))
       .unwrap();
-    let primitive = parse_fe_turbulence(&node).expect("should parse turbulence");
-    match primitive {
-      FilterPrimitive::Turbulence { base_frequency, .. } => {
-        assert_eq!(base_frequency.0, 0.0);
-        assert_eq!(base_frequency.1, 0.0);
+    let prim = parse_fe_turbulence(&node).expect("should parse turbulence");
+    match prim {
+      FilterPrimitive::Turbulence { base_frequency, .. } => assert_eq!(base_frequency, (0.0, 0.0)),
+      other => panic!("expected turbulence primitive, got {other:?}"),
+    }
+  }
+
+  #[test]
+  fn parse_transfer_fn_gamma_defaults_exponent_to_one() {
+    let doc = roxmltree::Document::parse(
+      "<filter><feComponentTransfer><feFuncR type=\"gamma\" amplitude=\"0.7\" offset=\"0.1\"/></feComponentTransfer></filter>",
+    )
+    .unwrap();
+    let node = doc.descendants().find(|n| n.has_tag_name("feFuncR")).unwrap();
+    let func = parse_transfer_fn(&node).expect("gamma func should parse");
+    match func {
+      TransferFn::Gamma {
+        amplitude,
+        exponent,
+        offset,
+      } => {
+        assert!((amplitude - 0.7).abs() < 1e-6);
+        assert!((exponent - 1.0).abs() < 1e-6);
+        assert!((offset - 0.1).abs() < 1e-6);
       }
-      _ => panic!("expected turbulence primitive"),
+      other => panic!("expected gamma transfer fn, got {other:?}"),
+    }
+  }
+
+  #[test]
+  fn color_matrix_saturate_accepts_values_above_one() {
+    let doc = roxmltree::Document::parse(
+      "<filter><feColorMatrix type=\"saturate\" values=\"2\"/></filter>",
+    )
+    .unwrap();
+    let node = doc
+      .descendants()
+      .find(|n| n.has_tag_name("feColorMatrix"))
+      .unwrap();
+    let prim = parse_fe_color_matrix(&node).expect("should parse color matrix");
+    match prim {
+      FilterPrimitive::ColorMatrix {
+        kind: ColorMatrixKind::Saturate(value),
+        ..
+      } => assert!((value - 2.0).abs() < 1e-6),
+      other => panic!("expected saturate color matrix, got {other:?}"),
+    }
+  }
+
+  #[test]
+  fn morphology_negative_radius_clamps_to_zero() {
+    let doc =
+      roxmltree::Document::parse("<filter><feMorphology radius=\"-2 -3\"/></filter>").unwrap();
+    let node = doc
+      .descendants()
+      .find(|n| n.has_tag_name("feMorphology"))
+      .unwrap();
+    let prim = parse_fe_morphology(&node).expect("should parse morphology");
+    match prim {
+      FilterPrimitive::Morphology { radius, .. } => assert_eq!(radius, (0.0, 0.0)),
+      other => panic!("expected morphology primitive, got {other:?}"),
+    }
+  }
+
+  #[test]
+  fn turbulence_negative_base_frequency_clamps_to_zero() {
+    let doc =
+      roxmltree::Document::parse("<filter><feTurbulence baseFrequency=\"-0.1 -0.2\"/></filter>")
+        .unwrap();
+    let node = doc
+      .descendants()
+      .find(|n| n.has_tag_name("feTurbulence"))
+      .unwrap();
+    let prim = parse_fe_turbulence(&node).expect("should parse turbulence");
+    match prim {
+      FilterPrimitive::Turbulence { base_frequency, .. } => assert_eq!(base_frequency, (0.0, 0.0)),
+      other => panic!("expected turbulence primitive, got {other:?}"),
     }
   }
 }
@@ -7465,6 +7555,26 @@ mod filter_region_input_clipping_tests {
         );
       }
     }
+  }
+
+  #[test]
+  fn composite_with_missing_input_is_transparent_and_does_not_skip_due_to_size_mismatch() {
+    let cache = ImageCache::new();
+    let svg = "<svg xmlns='http://www.w3.org/2000/svg'><filter id='f' filterUnits='userSpaceOnUse' x='2' y='2' width='4' height='4'><feFlood flood-color='red' result='filled'/><feComposite in='filled' in2='missing' operator='in'/></filter></svg>";
+    let filter = parse_filter_definition(svg, Some("f"), &cache).expect("parsed filter");
+
+    let mut pixmap = new_pixmap(8, 8).unwrap();
+    for px in pixmap.pixels_mut() {
+      *px = PremultipliedColorU8::TRANSPARENT;
+    }
+
+    let bbox = Rect::from_xywh(0.0, 0.0, 8.0, 8.0);
+    apply_svg_filter(filter.as_ref(), &mut pixmap, 1.0, bbox).unwrap();
+
+    assert!(
+      pixmap.pixels().iter().all(|px| px.alpha() == 0),
+      "expected output to be fully transparent when compositing with a missing input"
+    );
   }
 }
 
