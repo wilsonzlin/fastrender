@@ -2,8 +2,8 @@ use anyhow::{anyhow, bail, Context, Result};
 use clap::{Args, ValueEnum};
 use serde::Serialize;
 use std::collections::HashSet;
-use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::fs::{self, File, OpenOptions};
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
@@ -463,10 +463,50 @@ fn find_in_path(program: &str) -> Option<PathBuf> {
   None
 }
 
+fn is_snap_chromium(chrome: &Path) -> bool {
+  const SNAP_PREFIX: &str = "/snap/bin/chromium";
+  if chrome.to_string_lossy().starts_with(SNAP_PREFIX) {
+    return true;
+  }
+
+  // Some installations put a symlink/wrapper elsewhere (e.g. /usr/bin/chromium) that points into
+  // the snap. If the canonicalized path resolves to the snap binary, treat it as snap Chromium.
+  if let Ok(canon) = fs::canonicalize(chrome) {
+    if canon.to_string_lossy().starts_with(SNAP_PREFIX) {
+      return true;
+    }
+  }
+
+  // Fall back to sniffing wrapper scripts. Avoid reading the full Chrome binary by only sampling
+  // a small prefix.
+  let mut file = match File::open(chrome) {
+    Ok(f) => f,
+    Err(_) => return false,
+  };
+  let mut buf = [0u8; 4096];
+  let n = match file.read(&mut buf) {
+    Ok(n) => n,
+    Err(_) => return false,
+  };
+  let haystack = &buf[..n];
+  for needle in [
+    b"/snap/bin/chromium".as_slice(),
+    b"snap run chromium".as_slice(),
+    b"snap run chromium-browser".as_slice(),
+  ] {
+    if needle.len() <= haystack.len()
+      && haystack.windows(needle.len()).any(|window| window == needle)
+    {
+      return true;
+    }
+  }
+  false
+}
+
 fn create_temp_root(chrome: &Path) -> Result<TempDir> {
   // Snap-packaged Chromium is sandboxed from writing to arbitrary repo paths. Use a temp directory
   // under the snap's shared location when available so screenshot output is readable.
-  let snap_common = if chrome.to_string_lossy().starts_with("/snap/bin/chromium") {
+  let snap_common = if is_snap_chromium(chrome) {
     if let Ok(home) = std::env::var("HOME") {
       Some(PathBuf::from(home).join("snap/chromium/common"))
     } else {
@@ -839,7 +879,10 @@ fn absolutize_path(repo_root: &Path, path: &Path) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-  use super::patch_html_bytes;
+  use super::{is_snap_chromium, patch_html_bytes};
+  use std::fs;
+  use std::path::Path;
+  use tempfile::tempdir;
 
   #[test]
   fn patch_html_keeps_doctype_first_when_head_missing() {
@@ -859,5 +902,27 @@ mod tests {
       output_str.contains("<base href=\"file:///tmp/fixture/\">"),
       "patched HTML should include base href injection"
     );
+  }
+
+  #[test]
+  fn snap_detection_matches_direct_path() {
+    assert!(is_snap_chromium(Path::new("/snap/bin/chromium")));
+  }
+
+  #[test]
+  fn snap_detection_matches_wrapper_script() {
+    let temp = tempdir().expect("tempdir");
+    let script = temp.path().join("chromium");
+    fs::write(&script, "#!/bin/sh\nexec /snap/bin/chromium \"$@\"\n").expect("write wrapper");
+    assert!(is_snap_chromium(&script));
+  }
+
+  #[test]
+  fn snap_detection_matches_snap_run_wrapper_script() {
+    let temp = tempdir().expect("tempdir");
+    let script = temp.path().join("chromium-browser");
+    fs::write(&script, "#!/bin/sh\nexec snap run chromium \"$@\"\n")
+      .expect("write wrapper");
+    assert!(is_snap_chromium(&script));
   }
 }
