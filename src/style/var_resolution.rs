@@ -606,32 +606,32 @@ where
         output.push(')');
       }
       Token::ParenthesisBlock => {
+        push_css_with_token_splice_boundary(&mut output, "(");
         let nested = parser.parse_nested_block(|nested| {
           resolve_tokens_from_parser(nested, custom_properties, stack, depth)
             .map_err(|err| nested.new_custom_error(err))
         });
         let resolved = map_nested_result(nested, "()")?;
-        push_css_with_token_splice_boundary(&mut output, "(");
         output.push_str(&resolved);
         output.push(')');
       }
       Token::SquareBracketBlock => {
+        push_css_with_token_splice_boundary(&mut output, "[");
         let nested = parser.parse_nested_block(|nested| {
           resolve_tokens_from_parser(nested, custom_properties, stack, depth)
             .map_err(|err| nested.new_custom_error(err))
         });
         let resolved = map_nested_result(nested, "[]")?;
-        push_css_with_token_splice_boundary(&mut output, "[");
         output.push_str(&resolved);
         output.push(']');
       }
       Token::CurlyBracketBlock => {
+        push_css_with_token_splice_boundary(&mut output, "{");
         let nested = parser.parse_nested_block(|nested| {
           resolve_tokens_from_parser(nested, custom_properties, stack, depth)
             .map_err(|err| nested.new_custom_error(err))
         });
         let resolved = map_nested_result(nested, "{}")?;
-        push_css_with_token_splice_boundary(&mut output, "{");
         output.push_str(&resolved);
         output.push('}');
       }
@@ -1517,6 +1517,20 @@ mod tests {
   }
 
   #[test]
+  fn parse_simple_var_call_empty_fallback_is_preserved() {
+    let (name, fallback) = parse_simple_var_call("var(--x,)").expect("expected simple var call");
+    assert_eq!(name, "--x");
+    assert_eq!(fallback, Some(""));
+
+    let (_, fallback) =
+      parse_simple_var_call("var(--x,   )").expect("expected simple var call");
+    assert_eq!(fallback, Some(""));
+
+    let (_, fallback) = parse_simple_var_call("var(--x)").expect("expected simple var call");
+    assert_eq!(fallback, None);
+  }
+
+  #[test]
   fn test_simple_var_call_with_empty_fallback_resolves_to_empty() {
     let props = CustomPropertyStore::default();
     let value = PropertyValue::Keyword("var(--missing,)".to_string());
@@ -1561,7 +1575,8 @@ mod tests {
     let props = make_props(&[("--x", "0"), ("--y", "calc(1px)")]);
     let value = PropertyValue::Keyword("var(--x)var(--y)".to_string());
 
-    let VarResolutionResult::Resolved { css_text, .. } = resolve_var_for_property(&value, &props, "")
+    let VarResolutionResult::Resolved { css_text, .. } =
+      resolve_var_for_property(&value, &props, "")
     else {
       panic!("expected var() resolution to succeed");
     };
