@@ -2,6 +2,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use clap::{Args, ValueEnum};
 use image::{GenericImage, ImageBuffer, Rgba};
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
@@ -10,6 +11,7 @@ use std::process::{Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
 use url::Url;
+use walkdir::WalkDir;
 
 #[derive(Args, Debug)]
 pub struct ChromeBaselineFixturesArgs {
@@ -23,7 +25,11 @@ pub struct ChromeBaselineFixturesArgs {
   fixture_dir: PathBuf,
 
   /// Directory to write PNGs/logs into.
-  #[arg(long, default_value = "target/chrome_fixture_renders", value_name = "DIR")]
+  #[arg(
+    long,
+    default_value = "target/chrome_fixture_renders",
+    value_name = "DIR"
+  )]
   out_dir: PathBuf,
 
   /// Only render listed fixture directory names (comma-separated).
@@ -115,6 +121,9 @@ struct FixtureMetadata {
   dpr: f32,
   media: &'static str,
   js: JsModeMetadata,
+  input_sha256: String,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  assets_sha256: Option<String>,
   headless: &'static str,
   chrome_version: Option<String>,
   elapsed_ms: f64,
@@ -221,6 +230,8 @@ fn render_fixture(
   if !index_path.is_file() {
     bail!("missing index.html: {}", index_path.display());
   }
+  let index_bytes =
+    fs::read(&index_path).with_context(|| format!("read {}", index_path.display()))?;
 
   let output_png = out_dir.join(format!("{}.png", fixture.stem));
   let chrome_log = out_dir.join(format!("{}.chrome.log", fixture.stem));
@@ -250,7 +261,12 @@ fn render_fixture(
   let patched_dir = temp_root.join("html");
   fs::create_dir_all(&patched_dir).context("create patched HTML directory")?;
   let patched_html = patched_dir.join(format!("{}.html", fixture.stem));
-  write_patched_html(&index_path, &patched_html, Some(&base_url), matches!(args.js, JsMode::Off))?;
+  let patched = patch_html_bytes(
+    &index_bytes,
+    Some(&base_url),
+    matches!(args.js, JsMode::Off),
+  );
+  fs::write(&patched_html, patched).with_context(|| format!("write {}", patched_html.display()))?;
   let url = file_url(&patched_html)?;
 
   let timeout = if args.timeout == 0 {
@@ -346,7 +362,32 @@ fn render_fixture(
 
   let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
 
-  let metadata = FixtureMetadata {
+  let metadata = build_fixture_metadata(
+    fixture,
+    args,
+    headless_used,
+    chrome_version,
+    elapsed_ms,
+    &index_bytes,
+  )?;
+  let json = serde_json::to_vec_pretty(&metadata).context("serialize chrome fixture metadata")?;
+  fs::write(&metadata_path, json).with_context(|| format!("write {}", metadata_path.display()))?;
+
+  Ok(())
+}
+
+fn build_fixture_metadata(
+  fixture: &Fixture,
+  args: &ChromeBaselineFixturesArgs,
+  headless_used: HeadlessMode,
+  chrome_version: Option<&str>,
+  elapsed_ms: f64,
+  index_html: &[u8],
+) -> Result<FixtureMetadata> {
+  let input_sha256 = sha256_hex(index_html);
+  let assets_sha256 = compute_assets_sha256(&fixture.dir)?;
+
+  Ok(FixtureMetadata {
     fixture: fixture.stem.clone(),
     fixture_dir: fixture.dir.clone(),
     viewport: args.viewport,
@@ -356,17 +397,54 @@ fn render_fixture(
       JsMode::On => JsModeMetadata::On,
       JsMode::Off => JsModeMetadata::Off,
     },
+    input_sha256,
+    assets_sha256,
     headless: match headless_used {
       HeadlessMode::New => "new",
       HeadlessMode::Legacy => "legacy",
     },
     chrome_version: chrome_version.map(|v| v.to_string()),
     elapsed_ms,
-  };
-  let json = serde_json::to_vec_pretty(&metadata).context("serialize chrome fixture metadata")?;
-  fs::write(&metadata_path, json).with_context(|| format!("write {}", metadata_path.display()))?;
+  })
+}
 
-  Ok(())
+fn sha256_hex(bytes: &[u8]) -> String {
+  let digest = Sha256::digest(bytes);
+  digest.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+fn compute_assets_sha256(fixture_dir: &Path) -> Result<Option<String>> {
+  let assets_dir = fixture_dir.join("assets");
+  if !assets_dir.is_dir() {
+    return Ok(None);
+  }
+
+  let mut files = WalkDir::new(&assets_dir)
+    .follow_links(false)
+    .into_iter()
+    .filter_map(|entry| entry.ok())
+    .filter(|entry| entry.file_type().is_file())
+    .map(|entry| entry.into_path())
+    .collect::<Vec<_>>();
+
+  files.sort_by(|a, b| {
+    let a_rel = a.strip_prefix(&assets_dir).unwrap_or(a);
+    let b_rel = b.strip_prefix(&assets_dir).unwrap_or(b);
+    a_rel.to_string_lossy().cmp(&b_rel.to_string_lossy())
+  });
+
+  let mut hasher = Sha256::new();
+  for path in files {
+    let rel = path.strip_prefix(&assets_dir).unwrap_or(&path);
+    hasher.update(rel.to_string_lossy().as_bytes());
+    hasher.update([0u8]);
+    let bytes = fs::read(&path).with_context(|| format!("read {}", path.display()))?;
+    hasher.update(bytes);
+    hasher.update([0u8]);
+  }
+
+  let digest = hasher.finalize();
+  Ok(Some(digest.iter().map(|b| format!("{b:02x}")).collect()))
 }
 
 fn convert_pdf_to_stacked_png(
@@ -749,7 +827,9 @@ fn is_snap_chromium(chrome: &Path) -> bool {
     b"snap run chromium-browser".as_slice(),
   ] {
     if needle.len() <= haystack.len()
-      && haystack.windows(needle.len()).any(|window| window == needle)
+      && haystack
+        .windows(needle.len())
+        .any(|window| window == needle)
     {
       return true;
     }
@@ -1013,17 +1093,6 @@ fn file_url(path: &Path) -> Result<String> {
     .map_err(|_| anyhow!("could not convert {} to a file:// URL", absolute.display()))
 }
 
-fn write_patched_html(
-  src_html: &Path,
-  dest_html: &Path,
-  base_url: Option<&str>,
-  disable_js: bool,
-) -> Result<()> {
-  let data = fs::read(src_html).with_context(|| format!("read {}", src_html.display()))?;
-  let out = patch_html_bytes(&data, base_url, disable_js);
-  fs::write(dest_html, out).with_context(|| format!("write {}", dest_html.display()))
-}
-
 fn patch_html_bytes(data: &[u8], base_url: Option<&str>, disable_js: bool) -> Vec<u8> {
   let mut inserts = Vec::new();
   if let Some(base_url) = base_url {
@@ -1147,9 +1216,12 @@ fn absolutize_path(repo_root: &Path, path: &Path) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-  use super::{is_snap_chromium, patch_html_bytes};
+  use super::{
+    build_fixture_metadata, is_snap_chromium, patch_html_bytes, ChromeBaselineFixturesArgs,
+  };
+  use sha2::{Digest, Sha256};
   use std::fs;
-  use std::path::Path;
+  use std::path::{Path, PathBuf};
   use tempfile::tempdir;
 
   #[test]
@@ -1189,8 +1261,59 @@ mod tests {
   fn snap_detection_matches_snap_run_wrapper_script() {
     let temp = tempdir().expect("tempdir");
     let script = temp.path().join("chromium-browser");
-    fs::write(&script, "#!/bin/sh\nexec snap run chromium \"$@\"\n")
-      .expect("write wrapper");
+    fs::write(&script, "#!/bin/sh\nexec snap run chromium \"$@\"\n").expect("write wrapper");
     assert!(is_snap_chromium(&script));
+  }
+
+  #[test]
+  fn fixture_metadata_records_input_sha256() {
+    let temp = tempdir().expect("tempdir");
+    let fixture_dir = temp.path().join("fixture");
+    fs::create_dir_all(&fixture_dir).expect("create fixture dir");
+
+    let html = b"<!doctype html><title>fixture</title>";
+    fs::write(fixture_dir.join("index.html"), html).expect("write index.html");
+
+    let fixture = super::Fixture {
+      stem: "fixture".to_string(),
+      dir: fixture_dir,
+    };
+
+    let args = ChromeBaselineFixturesArgs {
+      fixture_dir: PathBuf::from("fixtures"),
+      out_dir: PathBuf::from("out"),
+      fixtures: None,
+      fixtures_pos: Vec::new(),
+      shard: None,
+      chrome: None,
+      chrome_dir: None,
+      viewport: (1040, 1240),
+      dpr: 1.0,
+      timeout: 15,
+      js: super::JsMode::Off,
+    };
+
+    let metadata = build_fixture_metadata(
+      &fixture,
+      &args,
+      super::HeadlessMode::New,
+      Some("Chromium 123.0.0.0"),
+      12.0,
+      html,
+    )
+    .expect("build fixture metadata");
+
+    let digest = Sha256::digest(html);
+    let expected = digest
+      .iter()
+      .map(|b| format!("{b:02x}"))
+      .collect::<String>();
+    assert_eq!(metadata.input_sha256, expected);
+
+    let json = serde_json::to_string(&metadata).expect("serialize metadata");
+    assert!(
+      json.contains("\"input_sha256\""),
+      "metadata JSON should include input_sha256; got: {json}"
+    );
   }
 }

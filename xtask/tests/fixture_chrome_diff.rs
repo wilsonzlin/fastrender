@@ -133,6 +133,113 @@ fn no_fastrender_fails_on_mismatched_metadata() {
 }
 
 #[test]
+#[cfg(unix)]
+fn no_chrome_fails_fast_on_stale_baselines_unless_allowed() {
+  use sha2::{Digest, Sha256};
+
+  let temp = tempdir().expect("tempdir");
+  let fixtures_root = temp.path().join("fixtures");
+  fs::create_dir_all(fixtures_root.join("a")).expect("create fixture dir");
+
+  let v1 = "<!doctype html><title>v1</title>";
+  fs::write(fixtures_root.join("a").join("index.html"), v1).expect("write fixture html v1");
+  let digest = Sha256::digest(v1.as_bytes());
+  let hash_v1 = digest
+    .iter()
+    .map(|b| format!("{b:02x}"))
+    .collect::<String>();
+
+  let out_dir = temp.path().join("out");
+  let chrome_out = out_dir.join("chrome");
+  let fastrender_out = out_dir.join("fastrender");
+  fs::create_dir_all(&chrome_out).expect("create chrome out dir");
+  fs::create_dir_all(&fastrender_out).expect("create fastrender out dir");
+  fs::write(chrome_out.join("a.png"), "PNG").expect("write dummy chrome png");
+  fs::write(fastrender_out.join("a.png"), "PNG").expect("write dummy fastrender png");
+  fs::write(
+    chrome_out.join("a.json"),
+    format!(r#"{{"viewport":[1040,1240],"dpr":1.0,"js":"off","input_sha256":"{hash_v1}"}}"#),
+  )
+  .expect("write chrome metadata");
+
+  let target_dir = temp.path().join("target");
+  let diff_renders_bin = target_dir
+    .join("release")
+    .join(format!("diff_renders{}", std::env::consts::EXE_SUFFIX));
+  fs::create_dir_all(diff_renders_bin.parent().unwrap()).expect("create release dir");
+  fs::write(&diff_renders_bin, "#!/usr/bin/env sh\nexit 0\n").expect("write stub diff_renders");
+  make_executable(&diff_renders_bin);
+
+  let v2 = "<!doctype html><title>v2</title>";
+  fs::write(fixtures_root.join("a").join("index.html"), v2).expect("write fixture html v2");
+
+  let output = Command::new(env!("CARGO_BIN_EXE_xtask"))
+    .current_dir(repo_root())
+    .env("CARGO_TARGET_DIR", &target_dir)
+    .args([
+      "fixture-chrome-diff",
+      "--no-build",
+      "--no-chrome",
+      "--no-fastrender",
+      "--fixtures-dir",
+      fixtures_root.to_string_lossy().as_ref(),
+      "--fixtures",
+      "a",
+      "--out-dir",
+      out_dir.to_string_lossy().as_ref(),
+    ])
+    .output()
+    .expect("run fixture-chrome-diff with --no-chrome");
+
+  assert!(
+    !output.status.success(),
+    "expected stale baseline to fail; stdout:\n{}\nstderr:\n{}",
+    String::from_utf8_lossy(&output.stdout),
+    String::from_utf8_lossy(&output.stderr)
+  );
+  let stderr = String::from_utf8_lossy(&output.stderr);
+  assert!(
+    stderr.contains("stale relative to fixture inputs"),
+    "expected stderr to mention stale baselines; got:\n{stderr}"
+  );
+  assert!(
+    stderr.contains("Rerun without --no-chrome"),
+    "expected stderr to mention re-running without --no-chrome; got:\n{stderr}"
+  );
+
+  let output_allow = Command::new(env!("CARGO_BIN_EXE_xtask"))
+    .current_dir(repo_root())
+    .env("CARGO_TARGET_DIR", &target_dir)
+    .args([
+      "fixture-chrome-diff",
+      "--no-build",
+      "--no-chrome",
+      "--no-fastrender",
+      "--allow-stale-chrome-baselines",
+      "--fixtures-dir",
+      fixtures_root.to_string_lossy().as_ref(),
+      "--fixtures",
+      "a",
+      "--out-dir",
+      out_dir.to_string_lossy().as_ref(),
+    ])
+    .output()
+    .expect("run fixture-chrome-diff with --allow-stale-chrome-baselines");
+
+  assert!(
+    output_allow.status.success(),
+    "expected override flag to allow stale baseline; stdout:\n{}\nstderr:\n{}",
+    String::from_utf8_lossy(&output_allow.stdout),
+    String::from_utf8_lossy(&output_allow.stderr)
+  );
+  let stderr = String::from_utf8_lossy(&output_allow.stderr);
+  assert!(
+    stderr.contains("warning:") && stderr.contains("stale relative to fixture inputs"),
+    "expected warning about stale baselines; got:\n{stderr}"
+  );
+}
+
+#[test]
 fn dry_run_prints_deterministic_plan_and_forwards_args() {
   let temp = tempdir().expect("tempdir");
   let fixtures_root = temp.path().join("fixtures");

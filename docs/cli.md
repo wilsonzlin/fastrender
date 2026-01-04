@@ -317,7 +317,7 @@ Both `scripts/chrome_fixture_baseline.sh` and `render_fixtures` support `--shard
 - Typical usage:
   - `cargo xtask fixture-chrome-diff` (writes `target/fixture_chrome_diff/report.html` and prints the path)
   - Select fixtures: `cargo xtask fixture-chrome-diff --fixtures grid_news,flex_dashboard`
-  - Re-run only the diff step (reuse the existing `<out>/chrome` renders): `cargo xtask fixture-chrome-diff --out-dir target/fixture_chrome_diff --no-chrome`
+  - Re-run only the diff step (reuse the existing `<out>/chrome` renders; validated against current fixture inputs): `cargo xtask fixture-chrome-diff --out-dir target/fixture_chrome_diff --no-chrome`
   - Re-run only the diff step (reuse both Chrome + FastRender renders): `cargo xtask fixture-chrome-diff --out-dir target/fixture_chrome_diff --no-chrome --no-fastrender`
   - Shorthand for diff-only: `cargo xtask fixture-chrome-diff --out-dir target/fixture_chrome_diff --diff-only`
 - Output layout:
@@ -327,13 +327,14 @@ Both `scripts/chrome_fixture_baseline.sh` and `render_fixtures` support `--shard
 - Notes:
   - JavaScript is disabled by default (Chrome baseline uses an injected CSP, matching FastRender's no-JS model).
   - When `--no-chrome` is set, existing Chrome baseline metadata (`<out>/chrome/<fixture>.json`) is validated against the current `--viewport`, `--dpr`, and `--js` values when present. Missing metadata emits a warning; use `--require-chrome-metadata` to fail fast.
+  - When `--no-chrome` is set, the command checks the stored Chrome baseline metadata against the current fixture `index.html` (and per-fixture `assets/` when available). If the fixture inputs have changed since the baseline was generated, it fails fast to avoid misleading diffs. Use `--allow-stale-chrome-baselines` to downgrade this to a warning.
   - Pass `--write-snapshot` to also write per-fixture snapshots/diagnostics for later `diff_snapshots` (equivalent to `render_fixtures --write-snapshot`).
 - Core flags:
   - Selection: `--fixtures <csv>`, `--shard <index>/<total>`
   - Paths: `--fixtures-dir <dir>`, `--out-dir <dir>`
   - Render params: `--viewport <WxH>`, `--dpr <float>`, `--timeout <secs>`, `--media {screen|print}`, `--jobs/-j <n>`, `--write-snapshot`, `--js {on|off}`
   - Diff params: `--tolerance <u8>`, `--max-diff-percent <float>`, `--max-perceptual-distance <float>`, `--sort-by {pixel|percent|perceptual}`, `--ignore-alpha`, `--fail-on-differences`
-  - Chrome: `--chrome <path>`, `--chrome-dir <dir>`, `--no-chrome`, `--require-chrome-metadata`, `--no-fastrender`, `--diff-only`
+  - Chrome: `--chrome <path>`, `--chrome-dir <dir>`, `--no-chrome`, `--require-chrome-metadata`, `--allow-stale-chrome-baselines`, `--no-fastrender`, `--diff-only`
   - Build: `--no-build` (skip `cargo build --release --bin diff_renders`; reuse an existing binary)
 
 ## `cargo xtask recapture-page-fixtures`

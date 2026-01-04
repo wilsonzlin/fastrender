@@ -2,10 +2,12 @@ use anyhow::{bail, Context, Result};
 use clap::{Args, ValueEnum};
 use regex::Regex;
 use serde::Deserialize;
-use std::collections::HashSet;
+use sha2::{Digest, Sha256};
+use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use walkdir::WalkDir;
 
 const DEFAULT_FIXTURES_DIR: &str = "tests/pages/fixtures";
 const DEFAULT_OUT_DIR: &str = "target/fixture_chrome_diff";
@@ -70,6 +72,10 @@ struct ChromeFixtureMetadata {
   viewport: (u32, u32),
   dpr: f32,
   js: JsMode,
+  #[serde(default)]
+  input_sha256: Option<String>,
+  #[serde(default)]
+  assets_sha256: Option<String>,
 }
 
 #[derive(Args, Debug)]
@@ -191,6 +197,14 @@ pub struct FixtureChromeDiffArgs {
   #[arg(long)]
   pub require_chrome_metadata: bool,
 
+  /// Allow reusing Chrome baselines even when the fixture inputs have changed since they were generated.
+  ///
+  /// This is only meaningful with `--no-chrome` (or `--diff-only`). When set, a fixture whose
+  /// `index.html` hash differs from the baseline metadata is downgraded to a warning instead of
+  /// failing the command.
+  #[arg(long)]
+  pub allow_stale_chrome_baselines: bool,
+
   /// Print the computed plan (commands + output paths) without executing.
   #[arg(long, hide = true)]
   pub dry_run: bool,
@@ -301,6 +315,7 @@ pub fn run_fixture_chrome_diff(args: FixtureChromeDiffArgs) -> Result<()> {
     }
     if let Some(stems) = selected_fixture_stems.as_deref() {
       validate_chrome_baseline_metadata(&layout.chrome, stems, &args)?;
+      validate_reused_chrome_baselines(&fixtures_root, &layout.chrome, stems, &args)?;
     }
   } else {
     clear_dir(&layout.chrome).context("clear Chrome output dir")?;
@@ -355,6 +370,9 @@ pub fn run_fixture_chrome_diff(args: FixtureChromeDiffArgs) -> Result<()> {
 fn validate_args(args: &FixtureChromeDiffArgs) -> Result<()> {
   if args.require_chrome_metadata && !args.no_chrome {
     bail!("--require-chrome-metadata requires --no-chrome");
+  }
+  if args.allow_stale_chrome_baselines && !args.no_chrome {
+    bail!("--allow-stale-chrome-baselines can only be used with --no-chrome (or --diff-only)");
   }
   if args.dpr <= 0.0 || !args.dpr.is_finite() {
     bail!("--dpr must be a positive, finite number");
@@ -507,6 +525,159 @@ fn validate_chrome_baseline_metadata(
   }
 
   Ok(())
+}
+
+#[derive(Debug)]
+struct StaleFixtureInfo {
+  baseline_input_sha256: Option<String>,
+  current_input_sha256: String,
+  baseline_assets_sha256: Option<String>,
+  current_assets_sha256: Option<String>,
+}
+
+fn validate_reused_chrome_baselines(
+  fixtures_root: &Path,
+  chrome_dir: &Path,
+  stems: &[String],
+  args: &FixtureChromeDiffArgs,
+) -> Result<()> {
+  let mut stale = BTreeMap::<String, StaleFixtureInfo>::new();
+
+  for stem in stems {
+    let metadata_path = chrome_dir.join(format!("{stem}.json"));
+    if !metadata_path.is_file() {
+      continue;
+    }
+
+    let bytes = fs::read(&metadata_path)
+      .with_context(|| format!("read chrome fixture metadata {}", metadata_path.display()))?;
+    let metadata: ChromeFixtureMetadata = serde_json::from_slice(&bytes)
+      .with_context(|| format!("parse chrome fixture metadata {}", metadata_path.display()))?;
+
+    let fixture_dir = fixtures_root.join(stem);
+    let index_path = fixture_dir.join("index.html");
+    let index_bytes = fs::read(&index_path)
+      .with_context(|| format!("read fixture entrypoint {}", index_path.display()))?;
+    let current_input_sha256 = sha256_hex(&index_bytes);
+
+    let baseline_input_sha256 = metadata.input_sha256;
+    let baseline_assets_sha256 = metadata.assets_sha256;
+    let current_assets_sha256 = if baseline_assets_sha256.is_some() {
+      fixture_assets_sha256(&fixture_dir.join("assets"))?
+    } else {
+      None
+    };
+
+    let mut is_stale = match baseline_input_sha256.as_deref() {
+      Some(hash) if hash == current_input_sha256 => false,
+      _ => true,
+    };
+
+    if !is_stale {
+      if let (Some(baseline_assets), Some(current_assets)) = (
+        baseline_assets_sha256.as_deref(),
+        current_assets_sha256.as_deref(),
+      ) {
+        if baseline_assets != current_assets {
+          is_stale = true;
+        }
+      } else if baseline_assets_sha256.is_some() && current_assets_sha256.is_none() {
+        // Assets were present when the baseline was generated but no longer exist.
+        is_stale = true;
+      }
+    }
+
+    if is_stale {
+      stale.insert(
+        stem.clone(),
+        StaleFixtureInfo {
+          baseline_input_sha256,
+          current_input_sha256,
+          baseline_assets_sha256,
+          current_assets_sha256,
+        },
+      );
+    }
+  }
+
+  if stale.is_empty() {
+    return Ok(());
+  }
+
+  let mut msg = String::from(
+    "Chrome baseline is stale relative to fixture inputs (fixture HTML/assets changed since the baseline was generated):\n",
+  );
+  for (stem, info) in &stale {
+    msg.push_str(&format!("  - {stem}: input_sha256 "));
+    match info.baseline_input_sha256.as_deref() {
+      Some(hash) => msg.push_str(hash),
+      None => msg.push_str("<missing from baseline metadata>"),
+    }
+    msg.push_str(" (baseline) vs ");
+    msg.push_str(&info.current_input_sha256);
+    msg.push_str(" (current)\n");
+
+    if let (Some(baseline_assets), Some(current_assets)) = (
+      info.baseline_assets_sha256.as_deref(),
+      info.current_assets_sha256.as_deref(),
+    ) {
+      if baseline_assets != current_assets {
+        msg.push_str(&format!(
+          "      assets_sha256 {baseline_assets} (baseline) vs {current_assets} (current)\n"
+        ));
+      }
+    }
+  }
+
+  msg.push_str(
+    "\nRerun without --no-chrome to regenerate chrome baselines.\n\
+     (Or pass --allow-stale-chrome-baselines to continue anyway.)",
+  );
+
+  if args.allow_stale_chrome_baselines {
+    eprintln!("warning: {msg}");
+    Ok(())
+  } else {
+    bail!(msg)
+  }
+}
+
+fn fixture_assets_sha256(assets_dir: &Path) -> Result<Option<String>> {
+  if !assets_dir.is_dir() {
+    return Ok(None);
+  }
+
+  let mut files = WalkDir::new(assets_dir)
+    .follow_links(false)
+    .into_iter()
+    .filter_map(|entry| entry.ok())
+    .filter(|entry| entry.file_type().is_file())
+    .map(|entry| entry.into_path())
+    .collect::<Vec<_>>();
+
+  files.sort_by(|a, b| {
+    let a_rel = a.strip_prefix(assets_dir).unwrap_or(a);
+    let b_rel = b.strip_prefix(assets_dir).unwrap_or(b);
+    a_rel.to_string_lossy().cmp(&b_rel.to_string_lossy())
+  });
+
+  let mut hasher = Sha256::new();
+  for path in files {
+    let rel = path.strip_prefix(assets_dir).unwrap_or(&path);
+    hasher.update(rel.to_string_lossy().as_bytes());
+    hasher.update([0u8]);
+    let bytes = fs::read(&path).with_context(|| format!("read {}", path.display()))?;
+    hasher.update(bytes);
+    hasher.update([0u8]);
+  }
+
+  let digest = hasher.finalize();
+  Ok(Some(digest.iter().map(|b| format!("{b:02x}")).collect()))
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+  let digest = Sha256::digest(bytes);
+  digest.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 struct Layout {
