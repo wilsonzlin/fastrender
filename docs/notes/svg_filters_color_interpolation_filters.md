@@ -130,13 +130,15 @@ means we operate on the stored (sRGB-encoded) bytes/floats.
     to sRGB.
 - `feFlood`
   - Outputs a solid color pixmap (premultiplied RGBA8).
-  - Currently does not consult `color-interpolation-filters` (it writes the specified sRGB bytes
-    directly).
+  - In FastRender this primitive does not need to branch on `color-interpolation-filters`: the
+    specified color is already in sRGB, and the output surface is stored as sRGB RGBA8.
 - `feImage`
   - Draws the referenced raster pixmap into the filter output using tiny-skia `draw_pixmap` with
-    `FilterQuality::Nearest` (no CIF-specific conversion today).
+    `FilterQuality::Nearest`. Since this uses nearest sampling (no interpolation), the result is
+    not affected by `color-interpolation-filters` in our current implementation.
 - `feTile`
-  - Copies/tiles the input pixels (no CIF-specific conversion today).
+  - Copies/tiles the input pixels. This is a byte-for-byte copy, so it is not affected by
+    `color-interpolation-filters` in our current implementation.
 - `feTurbulence`
   - Procedurally generates noise and encodes the output according to the step’s
     `color-interpolation-filters`: for `linearRGB`, the generated values are treated as linear and
