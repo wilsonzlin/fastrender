@@ -1,0 +1,51 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      html,
+      body {
+        margin: 0;
+        width: 100%;
+        height: 100%;
+        background: rgb(0, 255, 0);
+      }
+      .box {
+        position: absolute;
+        top: 20px;
+        width: 120px;
+        height: 120px;
+        background: rgb(255, 0, 0);
+        overflow: auto;
+        animation-timeline: scroll(self);
+        animation-name: fade;
+        animation-fill-mode: both;
+      }
+      .scrollable {
+        left: 20px;
+      }
+      .not-scrollable {
+        left: 160px;
+      }
+      .scrollable .inner {
+        height: 400px;
+      }
+      .not-scrollable .inner {
+        height: 40px;
+      }
+      @keyframes fade {
+        from {
+          opacity: 0;
+        }
+        to {
+          opacity: 1;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="box scrollable"><div class="inner"></div></div>
+    <div class="box not-scrollable"><div class="inner"></div></div>
+  </body>
+</html>
+

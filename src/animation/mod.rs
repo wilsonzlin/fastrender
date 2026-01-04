@@ -35,6 +35,7 @@ use crate::style::types::FilterFunction;
 use crate::style::types::Overflow;
 use crate::style::types::RangeOffset;
 use crate::style::types::ReferenceBox;
+use crate::style::types::ScrollTimelineScroller;
 use crate::style::types::ScrollTimeline;
 use crate::style::types::ShapeRadius;
 use crate::style::types::TimelineAxis;
@@ -2269,16 +2270,28 @@ fn collect_timelines(
     let context = timeline_scroll_context(node, origin, scroll_state, root_viewport, root_content);
     for tl in &style.scroll_timelines {
       if let Some(name) = &tl.name {
-        let (scroll_pos, scroll_range, viewport_size) = axis_scroll_state(
-          tl.axis,
-          style.writing_mode,
-          context.scroll.x,
-          context.scroll.y,
-          context.viewport.width,
-          context.viewport.height,
-          context.content.width,
-          context.content.height,
-        );
+        let horizontal = axis_is_horizontal(tl.axis, style.writing_mode);
+        let scroll_pos = if horizontal {
+          context.scroll.x
+        } else {
+          context.scroll.y
+        }
+        .max(0.0);
+        let viewport_size = if horizontal {
+          context.viewport.width
+        } else {
+          context.viewport.height
+        };
+        let content_size = if horizontal {
+          context.content.width
+        } else {
+          context.content.height
+        };
+        let scroll_range = (content_size - viewport_size).max(0.0);
+        if scroll_range <= f32::EPSILON {
+          continue;
+        }
+        let scroll_pos = scroll_pos.min(scroll_range);
         map.entry(name.clone()).or_insert(TimelineState::Scroll {
           timeline: tl.clone(),
           scroll_pos,
@@ -2349,12 +2362,63 @@ fn collect_timelines(
   }
 }
 
+fn scroll_self_timeline_progress(
+  node: &FragmentNode,
+  style: &ComputedStyle,
+  scroll_state: &ScrollState,
+  axis: TimelineAxis,
+  range: &AnimationRange,
+) -> Option<f32> {
+  let is_scroll_container = matches!(style.overflow_x, Overflow::Scroll | Overflow::Auto)
+    || matches!(style.overflow_y, Overflow::Scroll | Overflow::Auto);
+  if !is_scroll_container {
+    return None;
+  }
+
+  let horizontal = axis_is_horizontal(axis, style.writing_mode);
+  let view_size = if horizontal {
+    node.bounds.width()
+  } else {
+    node.bounds.height()
+  };
+  let content_size = if horizontal {
+    node.scroll_overflow.width()
+  } else {
+    node.scroll_overflow.height()
+  };
+
+  let scroll_range = (content_size - view_size).max(0.0);
+  if scroll_range <= f32::EPSILON {
+    return None;
+  }
+
+  let scroll = node
+    .box_id()
+    .map(|id| scroll_state.element_offset(id))
+    .unwrap_or(Point::ZERO);
+  let scroll_pos = if horizontal { scroll.x } else { scroll.y };
+  let scroll_pos = scroll_pos.max(0.0).min(scroll_range);
+
+  let timeline = ScrollTimeline {
+    axis,
+    ..ScrollTimeline::default()
+  };
+  Some(scroll_timeline_progress(
+    &timeline,
+    scroll_pos,
+    scroll_range,
+    view_size,
+    range,
+  ))
+}
+
 fn apply_animations_to_node(
   node: &mut FragmentNode,
   origin: Point,
   viewport: Rect,
   keyframes: &HashMap<String, KeyframesRule>,
   timelines: &HashMap<String, TimelineState>,
+  scroll_state: &ScrollState,
   animation_time_ms: Option<f32>,
 ) {
   if let Some(style_arc) = node.style.clone() {
@@ -2375,8 +2439,8 @@ fn apply_animations_to_node(
             None => settled_time_based_animation_progress(&*style_arc, idx),
           },
           AnimationTimeline::None => None,
-          AnimationTimeline::Named(ref timeline_name) => {
-            timelines.get(timeline_name).map(|state| match state {
+          AnimationTimeline::Named(ref timeline_name) => timelines.get(timeline_name).map(|state| {
+            match state {
               TimelineState::Scroll {
                 timeline,
                 scroll_pos,
@@ -2403,9 +2467,19 @@ fn apply_animations_to_node(
                 *scroll_offset,
                 &range,
               ),
-            })
-          }
-          AnimationTimeline::Scroll(_) | AnimationTimeline::View(_) => None,
+            }
+          }),
+          AnimationTimeline::Scroll(timeline) => match timeline.scroller {
+            ScrollTimelineScroller::SelfElement => scroll_self_timeline_progress(
+              node,
+              &*style_arc,
+              scroll_state,
+              timeline.axis,
+              &range,
+            ),
+            ScrollTimelineScroller::Root | ScrollTimelineScroller::Nearest => None,
+          },
+          AnimationTimeline::View(_) => None,
         };
 
         let Some(progress) = progress else { continue }; // skip if no timeline
@@ -2434,6 +2508,7 @@ fn apply_animations_to_node(
       viewport,
       keyframes,
       timelines,
+      scroll_state,
       animation_time_ms,
     );
   }
@@ -2448,6 +2523,7 @@ fn apply_animations_to_node(
       viewport,
       keyframes,
       timelines,
+      scroll_state,
       animation_time_ms,
     );
   }
@@ -2505,6 +2581,7 @@ pub fn apply_animations(
     viewport,
     &tree.keyframes,
     &timelines,
+    scroll_state,
     animation_time_ms,
   );
   for frag in &mut tree.additional_fragments {
@@ -2515,6 +2592,7 @@ pub fn apply_animations(
       viewport,
       &tree.keyframes,
       &timelines,
+      scroll_state,
       animation_time_ms,
     );
   }
