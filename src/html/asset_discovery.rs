@@ -96,6 +96,8 @@ pub fn discover_html_asset_urls_with_srcset_limit(
   base_url: &str,
   max_srcset_candidates: usize,
 ) -> HtmlAssetUrls {
+  let html = super::strip_template_contents(html);
+  let html = html.as_ref();
   let max_srcset_candidates = max_srcset_candidates.min(MAX_SRCSET_CANDIDATES);
   static IMG_SRC: OnceLock<Regex> = OnceLock::new();
   static IMG_SRCSET: OnceLock<Regex> = OnceLock::new();
@@ -447,6 +449,24 @@ mod tests {
       .into_iter()
       .map(str::to_string)
       .collect::<Vec<_>>()
+    );
+  }
+
+  #[test]
+  fn ignores_assets_inside_template() {
+    let html = r#"
+      <img src="live.png">
+      <template>
+        <img src="inert.png">
+        <iframe src="inert.html"></iframe>
+      </template>
+      <iframe src="live.html"></iframe>
+    "#;
+    let out = discover_html_asset_urls(html, "https://example.com/base/");
+    assert_eq!(out.images, vec!["https://example.com/base/live.png".to_string()]);
+    assert_eq!(
+      out.documents,
+      vec!["https://example.com/base/live.html".to_string()]
     );
   }
 

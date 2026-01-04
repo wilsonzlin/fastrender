@@ -10,7 +10,218 @@ pub mod viewport;
 
 use crate::css::loader::resolve_href;
 use crate::dom::{DomNode, DomNodeType, HTML_NAMESPACE};
+use memchr::memchr;
+use std::borrow::Cow;
 use url::Url;
+
+fn is_tag_name_char(b: u8) -> bool {
+  b.is_ascii_alphanumeric() || b == b'-' || b == b':'
+}
+
+fn find_tag_end(bytes: &[u8], start: usize) -> usize {
+  let mut quote: Option<u8> = None;
+  let mut i = start + 1;
+  while i < bytes.len() {
+    let b = bytes[i];
+    match quote {
+      Some(q) => {
+        if b == q {
+          quote = None;
+        }
+      }
+      None => {
+        if b == b'"' || b == b'\'' {
+          quote = Some(b);
+        } else if b == b'>' {
+          return i + 1;
+        }
+      }
+    }
+    i += 1;
+  }
+  bytes.len()
+}
+
+fn parse_tag_name_range(bytes: &[u8], start: usize, end: usize) -> Option<(bool, usize, usize)> {
+  if bytes.get(start)? != &b'<' {
+    return None;
+  }
+  let mut i = start + 1;
+  while i < end && bytes[i].is_ascii_whitespace() {
+    i += 1;
+  }
+  if i >= end {
+    return None;
+  }
+  let mut is_end = false;
+  if bytes[i] == b'/' {
+    is_end = true;
+    i += 1;
+    while i < end && bytes[i].is_ascii_whitespace() {
+      i += 1;
+    }
+  }
+  let name_start = i;
+  while i < end && is_tag_name_char(bytes[i]) {
+    i += 1;
+  }
+  if i == name_start {
+    return None;
+  }
+  Some((is_end, name_start, i))
+}
+
+fn find_bytes(bytes: &[u8], start: usize, needle: &[u8]) -> Option<usize> {
+  if needle.is_empty() {
+    return Some(start);
+  }
+  let first = needle[0];
+  let mut idx = start;
+  while let Some(rel) = memchr(first, &bytes[idx..]) {
+    let pos = idx + rel;
+    if pos + needle.len() <= bytes.len() && bytes[pos..pos + needle.len()] == *needle {
+      return Some(pos);
+    }
+    idx = pos + 1;
+  }
+  None
+}
+
+fn find_raw_text_element_end(bytes: &[u8], start: usize, tag: &'static [u8]) -> usize {
+  let mut idx = start;
+  while let Some(rel) = memchr(b'<', &bytes[idx..]) {
+    let pos = idx + rel;
+    if bytes.get(pos + 1) == Some(&b'/') {
+      let name_start = pos + 2;
+      let name_end = name_start + tag.len();
+      if name_end <= bytes.len()
+        && bytes[name_start..name_end].eq_ignore_ascii_case(tag)
+        && !bytes
+          .get(name_end)
+          .map(|b| is_tag_name_char(*b))
+          .unwrap_or(false)
+      {
+        return find_tag_end(bytes, pos);
+      }
+    }
+    idx = pos + 1;
+  }
+  bytes.len()
+}
+
+/// Return HTML source with the contents of `<template>` elements removed.
+///
+/// This is used by best-effort HTML scanners (meta refresh / asset discovery) to ensure the inert
+/// template subtrees cannot influence behavior such as subresource prefetching or redirect
+/// inference.
+pub(crate) fn strip_template_contents(html: &str) -> Cow<'_, str> {
+  let bytes = html.as_bytes();
+  let mut template_depth: usize = 0;
+  let mut copy_from: usize = 0;
+  let mut out: Option<String> = None;
+  let mut i: usize = 0;
+
+  while let Some(rel) = memchr(b'<', &bytes[i..]) {
+    let tag_start = i + rel;
+
+    if bytes
+      .get(tag_start..tag_start + 4)
+      .is_some_and(|head| head == b"<!--")
+    {
+      let end = find_bytes(bytes, tag_start + 4, b"-->")
+        .map(|pos| pos + 3)
+        .unwrap_or(bytes.len());
+      i = end;
+      continue;
+    }
+
+    if bytes
+      .get(tag_start..tag_start + 9)
+      .is_some_and(|head| head.eq_ignore_ascii_case(b"<![cdata["))
+    {
+      let end = find_bytes(bytes, tag_start + 9, b"]]>")
+        .map(|pos| pos + 3)
+        .unwrap_or(bytes.len());
+      i = end;
+      continue;
+    }
+
+    // Markup declarations / processing instructions (`<!doctype ...>`, `<?xml ...?>`, etc.)
+    if bytes.get(tag_start + 1).is_some_and(|b| *b == b'!' || *b == b'?') {
+      i = find_tag_end(bytes, tag_start);
+      continue;
+    }
+
+    let tag_end = find_tag_end(bytes, tag_start);
+    if tag_end == bytes.len() {
+      break;
+    }
+
+    let Some((is_end, name_start, name_end)) = parse_tag_name_range(bytes, tag_start, tag_end) else {
+      i = tag_start + 1;
+      continue;
+    };
+    let name = &bytes[name_start..name_end];
+
+    let raw_text_tag: Option<&'static [u8]> = if !is_end && name.eq_ignore_ascii_case(b"script") {
+      Some(b"script")
+    } else if !is_end && name.eq_ignore_ascii_case(b"style") {
+      Some(b"style")
+    } else if !is_end && name.eq_ignore_ascii_case(b"textarea") {
+      Some(b"textarea")
+    } else if !is_end && name.eq_ignore_ascii_case(b"title") {
+      Some(b"title")
+    } else if !is_end && name.eq_ignore_ascii_case(b"xmp") {
+      Some(b"xmp")
+    } else {
+      None
+    };
+
+    if !is_end && name.eq_ignore_ascii_case(b"plaintext") {
+      // `<plaintext>` consumes the remainder of the document as text; stop scanning to avoid
+      // treating anything following it as markup.
+      break;
+    }
+
+    if let Some(tag) = raw_text_tag {
+      i = find_raw_text_element_end(bytes, tag_end, tag);
+      continue;
+    }
+
+    if name.eq_ignore_ascii_case(b"template") {
+      if is_end {
+        if template_depth > 0 {
+          template_depth -= 1;
+          if template_depth == 0 {
+            let buf = out.as_mut().expect("closing template without output buffer");
+            buf.push_str(&html[tag_start..tag_end]);
+            copy_from = tag_end;
+          }
+        }
+      } else if template_depth == 0 {
+        let buf = out.get_or_insert_with(|| String::with_capacity(html.len()));
+        buf.push_str(&html[copy_from..tag_start]);
+        buf.push_str(&html[tag_start..tag_end]);
+        copy_from = tag_end;
+        template_depth = 1;
+      } else {
+        template_depth += 1;
+      }
+    }
+
+    i = tag_end;
+  }
+
+  match out {
+    None => Cow::Borrowed(html),
+    Some(mut buf) => {
+      if template_depth == 0 {
+        buf.push_str(&html[copy_from..]);
+      }
+      Cow::Owned(buf)
+    }
+  }
+}
 
 /// Find the first `<base href>` value within the document `<head>`.
 ///

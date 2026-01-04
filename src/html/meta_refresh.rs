@@ -10,6 +10,8 @@ use memchr::memchr2;
 ///
 /// Returns `Some(url)` when a refresh URL is found, otherwise `None`.
 pub fn extract_meta_refresh_url(html: &str) -> Option<String> {
+  let stripped = super::strip_template_contents(html);
+  let html = stripped.as_ref();
   let bytes = html.as_bytes();
   let mut idx = 0usize;
   while idx < bytes.len() {
@@ -63,6 +65,8 @@ pub fn extract_meta_refresh_url(html: &str) -> Option<String> {
 pub fn extract_js_location_redirect(html: &str) -> Option<String> {
   const MAX_REDIRECT_LEN: usize = 2048;
 
+  let stripped = super::strip_template_contents(html);
+  let html = stripped.as_ref();
   let decoded = decode_refresh_entities(html);
   let bytes = decoded.as_bytes();
 
@@ -818,6 +822,18 @@ mod tests {
   }
 
   #[test]
+  fn ignores_meta_refresh_inside_template() {
+    let html = r#"
+      <template><meta http-equiv="refresh" content="0; url=/bad"></template>
+      <meta http-equiv="refresh" content="0; url=/good">
+    "#;
+    assert_eq!(
+      extract_meta_refresh_url(html),
+      Some("/good".to_string())
+    );
+  }
+
+  #[test]
   fn extracts_js_location_href() {
     let html = "<script>window.location.href = 'https://example.com/next';</script>";
     assert_eq!(
@@ -1067,5 +1083,14 @@ mod tests {
     // data-location attribute should not be mistaken for a JS redirect target.
     let html = r#"<head data-location="{\"minlon\":1}"></head>"#;
     assert_eq!(extract_js_location_redirect(html), None);
+  }
+
+  #[test]
+  fn ignores_js_location_redirect_inside_template() {
+    let html = "<template><script>location.href='/bad';</script></template><script>location.href='/good';</script>";
+    assert_eq!(
+      extract_js_location_redirect(html),
+      Some("/good".to_string())
+    );
   }
 }
