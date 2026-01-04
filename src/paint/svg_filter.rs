@@ -3136,6 +3136,7 @@ fn apply_primitive(
       resolve_input(input2, source, results, current, filter_region),
       *mode,
       filter_region,
+      color_interpolation_filters,
     ),
     FilterPrimitive::Morphology { input, radius, op } => {
       let Some(mut img) = resolve_input(input, source, results, current, filter_region) else {
@@ -4027,19 +4028,41 @@ fn blend_pixmaps(
   b: Option<FilterResult>,
   mode: BlendMode,
   filter_region: Rect,
+  color_interpolation_filters: ColorInterpolationFilters,
 ) -> Option<FilterResult> {
   let mut base = a?;
   let top = b.unwrap_or_else(|| base.clone());
   let mut paint = PixmapPaint::default();
   paint.blend_mode = mode;
-  base.pixmap.draw_pixmap(
-    0,
-    0,
-    top.pixmap.as_ref(),
-    &paint,
-    Transform::identity(),
-    None,
-  );
+
+  match color_interpolation_filters {
+    ColorInterpolationFilters::SRGB => {
+      base.pixmap.draw_pixmap(
+        0,
+        0,
+        top.pixmap.as_ref(),
+        &paint,
+        Transform::identity(),
+        None,
+      );
+    }
+    ColorInterpolationFilters::LinearRGB => {
+      let mut base_pixmap = base.pixmap.clone();
+      let mut top_pixmap = top.pixmap.clone();
+      reencode_pixmap_to_linear_rgb(&mut base_pixmap);
+      reencode_pixmap_to_linear_rgb(&mut top_pixmap);
+      base_pixmap.draw_pixmap(
+        0,
+        0,
+        top_pixmap.as_ref(),
+        &paint,
+        Transform::identity(),
+        None,
+      );
+      reencode_pixmap_to_srgb(&mut base_pixmap);
+      base.pixmap = base_pixmap;
+    }
+  }
   let region = clip_region(base.region.union(top.region), filter_region);
   Some(FilterResult {
     pixmap: base.pixmap,
@@ -6635,6 +6658,7 @@ mod blend_pixmaps_tests {
       Some(solid_pixmap(SOURCE)),
       BlendMode::Multiply,
       filter_region,
+      ColorInterpolationFilters::SRGB,
     )
     .unwrap();
     let pixel = blended.pixmap.pixel(0, 0).unwrap();
@@ -6650,6 +6674,7 @@ mod blend_pixmaps_tests {
       Some(solid_pixmap(SOURCE)),
       BlendMode::Screen,
       filter_region,
+      ColorInterpolationFilters::SRGB,
     )
     .unwrap();
     let pixel = blended.pixmap.pixel(0, 0).unwrap();
@@ -6665,6 +6690,7 @@ mod blend_pixmaps_tests {
       Some(solid_pixmap(SOURCE)),
       BlendMode::Overlay,
       filter_region,
+      ColorInterpolationFilters::SRGB,
     )
     .unwrap();
     let pixel = blended.pixmap.pixel(0, 0).unwrap();
@@ -6680,6 +6706,7 @@ mod blend_pixmaps_tests {
       Some(solid_pixmap(SOURCE)),
       BlendMode::Difference,
       filter_region,
+      ColorInterpolationFilters::SRGB,
     )
     .unwrap();
     let pixel = blended.pixmap.pixel(0, 0).unwrap();
@@ -6695,10 +6722,52 @@ mod blend_pixmaps_tests {
       Some(solid_pixmap(SOURCE)),
       BlendMode::Exclusion,
       filter_region,
+      ColorInterpolationFilters::SRGB,
     )
     .unwrap();
     let pixel = blended.pixmap.pixel(0, 0).unwrap();
     assert_pixel_close(pixel, (164, 140, 147, 255));
+  }
+
+  #[test]
+  fn blend_normal_linear_rgb_differs_from_srgb() {
+    let backdrop = solid_pixmap((0, 0, 0, 255));
+    let filter_region = backdrop.region;
+    let source = solid_pixmap((128, 128, 128, 128));
+
+    let srgb = blend_pixmaps(
+      Some(backdrop.clone()),
+      Some(source.clone()),
+      BlendMode::SourceOver,
+      filter_region,
+      ColorInterpolationFilters::SRGB,
+    )
+    .unwrap();
+    let srgb_px = srgb.pixmap.pixel(0, 0).unwrap();
+    assert_pixel_close(srgb_px, (128, 128, 128, 255));
+
+    let linear = blend_pixmaps(
+      Some(backdrop),
+      Some(source),
+      BlendMode::SourceOver,
+      filter_region,
+      ColorInterpolationFilters::LinearRGB,
+    )
+    .unwrap();
+    let linear_px = linear.pixmap.pixel(0, 0).unwrap();
+    assert_pixel_close(linear_px, (188, 188, 188, 255));
+
+    assert!(
+      (linear_px.red() as i16 - srgb_px.red() as i16).abs() > 10,
+      "expected LinearRGB and SRGB outputs to differ, got srgb={:?} linear={:?}",
+      (srgb_px.red(), srgb_px.green(), srgb_px.blue(), srgb_px.alpha()),
+      (
+        linear_px.red(),
+        linear_px.green(),
+        linear_px.blue(),
+        linear_px.alpha()
+      )
+    );
   }
 
   fn solid_pixmap(color: (u8, u8, u8, u8)) -> FilterResult {
