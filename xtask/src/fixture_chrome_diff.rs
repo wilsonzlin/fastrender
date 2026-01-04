@@ -145,7 +145,7 @@ pub fn run_fixture_chrome_diff(args: FixtureChromeDiffArgs) -> Result<()> {
       .arg("chrome-baseline-fixtures")
       .arg("--fixtures-root")
       .arg(&fixtures_root)
-      .arg("--out")
+      .arg("--out-dir")
       .arg(&chrome_out_dir)
       .arg("--viewport")
       .arg(&viewport)
@@ -246,4 +246,3 @@ fn ensure_clean_dir(path: &Path) -> Result<()> {
   fs::create_dir_all(path).with_context(|| format!("create directory {}", path.display()))?;
   Ok(())
 }
-
