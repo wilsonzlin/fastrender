@@ -62,7 +62,7 @@ use crate::animation;
 use crate::compat::CompatProfile;
 use crate::css::encoding::{decode_css_bytes, decode_css_bytes_cow};
 use crate::css::loader::{
-  absolutize_css_urls_cow, extract_css_links, extract_embedded_css_urls_with_meta, infer_base_url,
+  absolutize_css_urls_cow, extract_css_links, extract_embedded_css_urls_with_meta,
   inject_css_into_html, inline_imports_with_diagnostics, link_rel_is_stylesheet_candidate,
   resolve_href, resolve_href_with_base, should_scan_embedded_css_urls, InlineImportState,
   StylesheetInlineBudget,
@@ -6710,13 +6710,9 @@ impl FastRender {
     let _deadline_guard = DeadlineGuard::install(Some(&deadline));
 
     let base_hint = self.base_url.clone().unwrap_or_default();
-    let base_url = if base_hint.starts_with("file://") {
-      infer_base_url(html, &base_hint).into_owned()
-    } else {
-      base_hint.clone()
-    };
-    if !base_url.is_empty() {
-      self.set_base_url(base_url);
+    self.set_document_url(base_hint.clone());
+    if !base_hint.trim().is_empty() {
+      self.set_base_url(base_hint);
     }
     let dom = self.parse_html(html)?;
     self.update_base_url_from_dom(&dom);
