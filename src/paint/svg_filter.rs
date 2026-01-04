@@ -39,7 +39,7 @@ type RenderResult<T> = std::result::Result<T, RenderError>;
 const MAX_FILTER_RES: u32 = 4096;
 const MAX_TURBULENCE_OCTAVES: u32 = 8;
 const FILTER_DEADLINE_STRIDE: usize = 256;
-const MAX_SVG_FILTER_RECURSION_DEPTH: usize = 32;
+const MAX_SVG_FILTER_DEPTH: usize = 128;
 
 static FILTER_CACHE: OnceLock<Mutex<FilterCache>> = OnceLock::new();
 
@@ -454,7 +454,7 @@ struct DepthGuard {
 impl DepthGuard {
   fn try_new(cell: &'static Cell<usize>) -> Option<Self> {
     let depth = cell.get();
-    if depth >= MAX_SVG_FILTER_RECURSION_DEPTH {
+    if depth >= MAX_SVG_FILTER_DEPTH {
       return None;
     }
     cell.set(depth + 1);
@@ -6103,6 +6103,51 @@ mod tests {
 
     apply_svg_filter(&filter, &mut pixmap, 1.0, bbox).unwrap();
     assert!(pixmap.pixels().iter().all(|px| px.alpha() == 0));
+  }
+
+  #[test]
+  fn svg_filter_recursion_limit_is_noop() {
+    struct ResetDepth;
+
+    impl Drop for ResetDepth {
+      fn drop(&mut self) {
+        SVG_FILTER_DEPTH.with(|cell| cell.set(0));
+      }
+    }
+
+    SVG_FILTER_DEPTH.with(|cell| cell.set(0));
+    let _reset = ResetDepth;
+
+    let mut pixmap = new_pixmap(2, 2).unwrap();
+    for px in pixmap.pixels_mut() {
+      *px = premul(10, 20, 30, 255);
+    }
+    let original = pixels_to_vec(&pixmap);
+
+    let mut filter = SvgFilter {
+      color_interpolation_filters: ColorInterpolationFilters::LinearRGB,
+      steps: vec![FilterStep {
+        result: None,
+        color_interpolation_filters: None,
+        primitive: FilterPrimitive::Flood {
+          color: Rgba::new(255, 0, 0, 1.0),
+          opacity: 1.0,
+        },
+        region: None,
+      }],
+      region: SvgFilterRegion::default_for_units(SvgFilterUnits::ObjectBoundingBox),
+      filter_res: None,
+      primitive_units: SvgFilterUnits::ObjectBoundingBox,
+      fingerprint: 0,
+    };
+    filter.refresh_fingerprint();
+
+    let bbox = Rect::from_xywh(0.0, 0.0, 2.0, 2.0);
+    SVG_FILTER_DEPTH.with(|cell| cell.set(MAX_SVG_FILTER_DEPTH));
+
+    let result = apply_svg_filter_with_cache(&filter, &mut pixmap, 1.0, bbox, None);
+    assert!(result.is_ok());
+    assert_eq!(pixels_to_vec(&pixmap), original);
   }
 
   #[test]
