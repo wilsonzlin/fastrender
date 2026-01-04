@@ -1,0 +1,53 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      @font-face {
+        font-family: "Noto Sans JP Subset";
+        src: url("tests/fixtures/fonts/NotoSansJP-subset.ttf") format("truetype");
+      }
+
+      body {
+        margin: 0;
+        padding: 40px;
+        background: #fff;
+      }
+
+      .vert {
+        position: relative;
+        width: 220px;
+        height: 360px;
+        padding: 20px;
+        border: 1px solid #111;
+
+        writing-mode: vertical-rl;
+        text-orientation: upright;
+
+        font-family: "Noto Sans JP Subset";
+        font-size: 52px;
+        line-height: 1;
+        letter-spacing: 20px;
+      }
+
+      /* Guide line to make sideways drift (wrong-axis spacing) obvious. */
+      .vert::before {
+        content: "";
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        right: 20px;
+        width: 2px;
+        background: rgba(255, 0, 0, 0.35);
+      }
+
+      .text {
+        position: relative;
+        z-index: 1;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="vert"><span class="text">ABC</span></div>
+  </body>
+</html>

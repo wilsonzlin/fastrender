@@ -227,6 +227,7 @@ fn test_all_fixture_files_exist() {
     "text_bidi_mirror",
     "text_line_break",
     "text_overflow_vertical",
+    "text_letter_spacing_vertical",
     "shadow_dom",
     "svg_foreign_object",
   ];
@@ -475,6 +476,12 @@ fn test_fixture_text_line_break() {
   test_fixture("text_line_break").expect("text_line_break fixture should render");
 }
 
+#[test]
+fn test_fixture_text_letter_spacing_vertical() {
+  test_fixture("text_letter_spacing_vertical")
+    .expect("text_letter_spacing_vertical fixture should render");
+}
+
 //
 // Shadow DOM Tests
 //
@@ -552,6 +559,7 @@ pub fn list_fixtures() -> Vec<&'static str> {
     "text_bidi_mirror",
     "text_line_break",
     "text_overflow_vertical",
+    "text_letter_spacing_vertical",
     // Shadow DOM
     "shadow_dom",
     // SVG
@@ -687,6 +695,11 @@ pub fn fixture_descriptions() -> Vec<(&'static str, &'static str, &'static str)>
       "text_line_break",
       "Text",
       "Line breaking and white-space handling",
+    ),
+    (
+      "text_letter_spacing_vertical",
+      "Text",
+      "letter-spacing on vertical writing-mode should not drift sideways",
     ),
     (
       "shadow_dom",

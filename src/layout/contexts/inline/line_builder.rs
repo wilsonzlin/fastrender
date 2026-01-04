@@ -929,7 +929,10 @@ impl TextItem {
 
       for (idx, glyph) in run.glyphs.iter_mut().enumerate() {
         let extra = extra_by_glyph[idx];
-        glyph.x_offset += cumulative_shift;
+        match axis {
+          InlineAxis::Horizontal => glyph.x_offset += cumulative_shift,
+          InlineAxis::Vertical => glyph.y_offset += cumulative_shift,
+        }
         if extra != 0.0 {
           add_inline_advance(glyph, axis, extra);
         }
