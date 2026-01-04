@@ -19,18 +19,28 @@ Key points:
 
 ## Preserve-3D fallback
 
-Projective warping is enabled by default (via the `preserve3d_warp` feature) and
-can be disabled with `FASTR_PRESERVE3D_DISABLE_WARP=1`. When the warp path is
-unavailable or unstable, the compositor falls back deterministically:
+The display-list renderer has a runtime preserve-3d path:
 
-- Stable perspective transforms are warped; otherwise they are approximated to
-  2D.
-- Depth sorting still runs for `transform-style: preserve-3d` when all child
-  depths are stable; otherwise it falls back to the authored paint order
-  (equivalent to `transform-style: flat`).
-- Degenerate projections (non-finite, `w≈0`, or behind the camera) force flat
-  ordering but still honour backface-visibility where possible.
+- When it encounters a `transform-style: preserve-3d` stacking context, it
+  builds a small "scene" from the subtree.
+- The scene is split into planes (flattened item segments + non-preserve-3d
+  subtrees), each carrying an accumulated 3D transform.
+- Planes are culled when `backface-visibility: hidden` and the surface normal
+  faces away from the camera.
+- Remaining planes are depth-sorted back-to-front and then rasterized into
+  temporary pixmaps which are composited onto the destination:
+  - If the transform is affine (or projective warping is disabled), the pixmap
+    is drawn using a 2D affine approximation.
+  - Otherwise a homography is computed from the source quad to the projected
+    destination quad and the pixmap is projectively warped.
+  - If the projective warp is unstable (degenerate `w`, non-finite math, or
+    otherwise invalid), the renderer falls back to the affine approximation.
 
-Set `FASTR_PRESERVE3D_DEBUG=1` to log the chosen path per item while debugging
-real pages. If you build without default features, set `FASTR_PRESERVE3D_WARP=1`
-to opt back into projective warping.
+Projective warping is enabled by default (via the `preserve3d_warp` feature). It
+can be disabled at runtime with `FASTR_PRESERVE3D_DISABLE_WARP=1`, which forces
+all projective warps to use the affine approximation instead. If you build
+without default features, set `FASTR_PRESERVE3D_WARP=1` to opt back into the
+projective warp path.
+
+Set `FASTR_PRESERVE3D_DEBUG=1` to log preserve-3d scene sorting + warp fallback
+decisions while debugging real pages.

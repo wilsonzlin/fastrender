@@ -488,6 +488,17 @@ fn clamp01(value: f32) -> f32 {
   value.clamp(0.0, 1.0)
 }
 
+fn env_flag(name: &str) -> bool {
+  std::env::var(name)
+    .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
+    .unwrap_or(false)
+}
+
+fn projective_warp_enabled_from_env() -> bool {
+  let warp_enabled = cfg!(feature = "preserve3d_warp") || env_flag("FASTR_PRESERVE3D_WARP");
+  warp_enabled && !env_flag("FASTR_PRESERVE3D_DISABLE_WARP")
+}
+
 static INV_U8_TO_F32: OnceLock<[f32; 256]> = OnceLock::new();
 
 /// Composite `layer` into `target` using manual mix-blend-mode evaluation.
@@ -2430,6 +2441,8 @@ pub struct DisplayListRenderer {
   culled_depth: usize,
   preserve_3d_disabled: bool,
   preserve_3d_scene_depth: usize,
+  projective_warp_enabled: bool,
+  preserve_3d_debug: bool,
   background: Rgba,
   paint_parallelism: PaintParallelism,
   image_cache: HashMap<ImageKey, Arc<Pixmap>>,
@@ -3100,6 +3113,8 @@ impl DisplayListRenderer {
       culled_depth: 0,
       preserve_3d_disabled: false,
       preserve_3d_scene_depth: 0,
+      projective_warp_enabled: projective_warp_enabled_from_env(),
+      preserve_3d_debug: env_flag("FASTR_PRESERVE3D_DEBUG"),
       background,
       paint_parallelism: PaintParallelism::default(),
       image_cache: HashMap::new(),
@@ -6126,11 +6141,22 @@ impl DisplayListRenderer {
 
     let mut order = 0;
     let mut scene_items = collect_scene_items(&node, &parent_transform, true, &mut order, &[]);
+    let before_backface_cull = scene_items.len();
     scene_items.retain(|item| {
       !matches!(item.backface_visibility, BackfaceVisibility::Hidden)
         || !backface_is_hidden(&item.transform)
     });
-
+    if self.preserve_3d_debug {
+      let culled = before_backface_cull.saturating_sub(scene_items.len());
+      eprintln!(
+        "preserve-3d context start={} end={} items={} culled_backfaces={} warp_enabled={}",
+        start_index,
+        end_idx,
+        scene_items.len(),
+        culled,
+        self.projective_warp_enabled
+      );
+    }
     let sort_items: Vec<depth_sort::SceneItem> = scene_items
       .iter()
       .map(|item| depth_sort::SceneItem {
@@ -6146,12 +6172,32 @@ impl DisplayListRenderer {
       check_active_periodic(&mut deadline_counter, DEADLINE_STRIDE, RenderStage::Paint)
         .map_err(Error::Render)?;
       let scene_item = &scene_items[idx];
-      if let Some(pixmap) = self.render_scene_item(&scene_item)? {
+      if let Some(pixmap) = self.render_scene_item(scene_item)? {
         let adjusted_transform = scene_item.transform.multiply(&Transform3D::translate(
           scene_item.bounds.x(),
           scene_item.bounds.y(),
           0.0,
         ));
+        if self.preserve_3d_debug {
+          let is_affine = Homography::from_transform3d_z0(&adjusted_transform).is_affine();
+          let depth = {
+            let center = scene_item.plane_rect.center();
+            let (_tx, _ty, tz, tw) = scene_item.transform.transform_point(center.x, center.y, 0.0);
+            if tz.is_finite() && tw.is_finite() && tw.abs() >= Transform3D::MIN_PROJECTIVE_W {
+              tz / tw
+            } else {
+              f32::NAN
+            }
+          };
+          eprintln!(
+            "preserve-3d item order={} depth={depth:.4} affine={is_affine} bounds=({}, {}, {}, {})",
+            scene_item.paint_order,
+            scene_item.bounds.x(),
+            scene_item.bounds.y(),
+            scene_item.bounds.width(),
+            scene_item.bounds.height(),
+          );
+        }
         self.warp_pixmap(&pixmap, &adjusted_transform)?;
       }
     }
@@ -6260,7 +6306,11 @@ impl DisplayListRenderer {
     let parent_transform = self.canvas.transform();
 
     let homography = Homography::from_transform3d_z0(transform);
-    if homography.is_affine() {
+    let warp_enabled = self.projective_warp_enabled;
+    if homography.is_affine() || !warp_enabled {
+      if self.preserve_3d_debug && !homography.is_affine() && !warp_enabled {
+        eprintln!("preserve-3d warp disabled; using affine approximation");
+      }
       let clip = self.canvas.clip_mask().cloned();
       let (t, _valid) = self.to_skia_transform_checked(transform);
       let skia_transform = concat_transforms(parent_transform, t);
@@ -6331,6 +6381,9 @@ impl DisplayListRenderer {
     }
 
     // Fall back to the affine approximation when a stable projective warp can't be computed.
+    if self.preserve_3d_debug {
+      eprintln!("preserve-3d warp fallback; using affine approximation");
+    }
     let clip = self.canvas.clip_mask().cloned();
     let (t, _valid) = self.to_skia_transform_checked(transform);
     let skia_transform = concat_transforms(parent_transform, t);
@@ -6609,12 +6662,12 @@ impl DisplayListRenderer {
           self.culled_depth = 1;
           return Ok(());
         }
-
+ 
         let warp_candidate = parent_perspective.multiply(&local_transform);
-        let projective_transform = {
-          let h = Homography::from_transform3d_z0(&warp_candidate);
-          (!h.is_affine()).then_some(warp_candidate)
-        };
+        let warp_candidate_is_projective =
+          !Homography::from_transform3d_z0(&warp_candidate).is_affine();
+        let projective_transform = (self.projective_warp_enabled && warp_candidate_is_projective)
+          .then_some(warp_candidate);
 
         let child_base_transform = if let Some(perspective) = item.child_perspective.as_ref() {
           painting_transform_3d.multiply(perspective)
@@ -6640,16 +6693,25 @@ impl DisplayListRenderer {
         let parent_transform = self.canvas.transform();
         let mut local_skia_transform: Option<Transform> = None;
         let mut combined_transform = parent_transform;
-        if projective_transform.is_none() && item.transform.is_some() {
-          let (t, valid) = self.to_skia_transform_checked(&local_transform);
+        let mut applied_perspective = false;
+        if projective_transform.is_none()
+          && (item.transform.is_some() || (!self.projective_warp_enabled && warp_candidate_is_projective))
+        {
+          let transform_for_canvas = if !self.projective_warp_enabled && warp_candidate_is_projective {
+            &warp_candidate
+          } else {
+            &local_transform
+          };
+          let (t, valid) = self.to_skia_transform_checked(transform_for_canvas);
           if valid {
             local_skia_transform = Some(t);
             combined_transform = combined_transform.post_concat(t);
+            applied_perspective = !self.projective_warp_enabled && warp_candidate_is_projective;
           }
         }
 
         self.transform_stack.push(child_base_transform);
-        let perspective_base = if projective_transform.is_some() {
+        let perspective_base = if projective_transform.is_some() || applied_perspective {
           Transform3D::identity()
         } else {
           parent_perspective

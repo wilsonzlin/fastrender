@@ -132,9 +132,9 @@ These are emitted by the paint pipeline:
 - `FASTR_DUMP_COMMANDS=<N>` (omit `N` to dump all)
 - `FASTR_TRACE_IMAGE_PAINT=<N>` – log up to N image paints (empty value defaults to 50).
 - `FASTR_LOG_IMAGE_FAIL=1` – log failed image loads/placeholders.
-- `FASTR_PRESERVE3D_DEBUG=1` – log preserve-3d classification/fallback decisions.
-- `FASTR_PRESERVE3D_DISABLE_WARP=1` – force preserve-3d to fall back to affine flattening (projective warping is enabled by default).
-- `FASTR_PRESERVE3D_WARP=1` – opt into the warp path when building without the default `preserve3d_warp` feature.
+- `FASTR_PRESERVE3D_DEBUG=1` – log preserve-3d scene depth sorting + warp fallback decisions during painting.
+- `FASTR_PRESERVE3D_DISABLE_WARP=1` – disable projective warping and force 2D affine approximation for 3D/perspective transforms (including preserve-3d scenes).
+- `FASTR_PRESERVE3D_WARP=1` – opt into the projective warp path when building without the default `preserve3d_warp` feature.
 
 ## Debug dumps (layout / fragments)
 
