@@ -554,6 +554,15 @@ Both `scripts/chrome_fixture_baseline.sh` and `render_fixtures` support `--shard
       --progress-dir progress/pages \
       --fail-on-stage-sum-exceeds-total
     ```
+- Accuracy (optional; best-effort / non-deterministic because cached pages still load live subresources):
+  - `pageset_progress run --accuracy --baseline=chrome` computes pixel-diff metrics against headless Chrome screenshots of the cached HTML (stored in each page's `progress/pages/<stem>.json`).
+  - Baseline artifacts live under `fetches/chrome_renders/` by default (override with `--baseline-dir <dir>`):
+    - `<stem>.png` — screenshot
+    - `<stem>.json` — metadata sidecar used to detect stale baselines (records viewport/DPR/JS/headless mode plus `html_sha256` of `fetches/html/<stem>.html` before patching)
+  - Baselines are auto-generated when missing or stale (cached HTML hash or viewport/DPR/JS mismatch) via `scripts/chrome_baseline.sh`.
+  - Refresh controls (require `--accuracy --baseline=chrome`):
+    - `--baseline-refresh` regenerates baselines for all selected pages (overwrites existing PNG + JSON).
+    - `--baseline-refresh-if-unverified` regenerates only baselines that have a PNG but no metadata sidecar (useful for migrating older baseline directories; otherwise they are compared with a warning).
 - Safety: uses **panic containment** (per-page worker process) and a **hard timeout** (kills runaway workers) so one broken page cannot stall the whole run.
 - Worker Rayon threads: `pageset_progress run` spawns up to `--jobs` worker processes in parallel and sets `RAYON_NUM_THREADS` for each worker to `available_parallelism()/jobs` (min 1, additionally clamped by a detected cgroup CPU quota on Linux) unless the parent environment already defines it.
 - Outputs:

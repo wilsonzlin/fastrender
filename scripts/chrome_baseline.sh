@@ -55,6 +55,7 @@ Environment (optional):
 Output:
   <out-dir>/<stem>.png        Screenshot
   <out-dir>/<stem>.chrome.log Chrome stdout/stderr for debugging
+  <out-dir>/<stem>.json       JSON metadata (viewport/DPR/JS/headless mode/input hash/etc.)
 
 EOF
 }
@@ -152,6 +153,9 @@ if [[ ! -d "${HTML_DIR}" ]]; then
 fi
 
 mkdir -p "${OUT_DIR}"
+
+# Best-effort Chrome version string, recorded in per-page metadata for traceability.
+CHROME_VERSION="$("${CHROME}" --version 2>/dev/null | head -n 1 | tr -d '\r' || true)"
 
 # Snap-packaged Chromium runs under strict confinement (AppArmor + mount namespaces).
 # In that configuration, `/tmp` is private to the snap, and Chromium may be unable to
@@ -300,8 +304,9 @@ for html_path in "${HTML_FILES[@]}"; do
     disable_js="1"
   fi
 
-  python3 - "${html_path}" "${patched_html}" "${base_url}" "${disable_js}" <<'PY'
+  html_sha256="$(python3 - "${html_path}" "${patched_html}" "${base_url}" "${disable_js}" <<'PY'
 import sys
+import hashlib
 
 in_path = sys.argv[1]
 out_path = sys.argv[2]
@@ -311,8 +316,10 @@ if len(sys.argv) >= 5:
     disable_js = sys.argv[4].strip() == "1"
 
 data = open(in_path, "rb").read()
+sha256 = hashlib.sha256(data).hexdigest()
 if not base_url and not disable_js:
     open(out_path, "wb").write(data)
+    print(sha256, end="")
     sys.exit(0)
 
 lower = data.lower()
@@ -361,6 +368,7 @@ if disable_js:
 insertion = b"".join(inserts)
 if not insertion:
     open(out_path, "wb").write(data)
+    print(sha256, end="")
     sys.exit(0)
 
 out = insert_after_open_tag(b"<head", insertion)
@@ -374,11 +382,14 @@ if out is None:
     out = insertion + data
 
 open(out_path, "wb").write(out)
+print(sha256, end="")
 PY
+)"
 
   url="file://${patched_html}"
   png_path="${OUT_DIR}/${stem}.png"
   chrome_log="${OUT_DIR}/${stem}.chrome.log"
+  metadata_path="${OUT_DIR}/${stem}.json"
   tmp_png_dir="${TMP_ROOT}/screenshots"
   mkdir -p "${tmp_png_dir}"
   tmp_png_path="${tmp_png_dir}/${stem}.png"
@@ -454,6 +465,41 @@ PY
 
   if [[ "${ran_ok}" -eq 1 && -s "${tmp_png_path}" ]]; then
     cp -f "${tmp_png_path}" "${png_path}"
+    headless_mode="legacy"
+    if [[ "${HEADLESS_FLAG}" == "--headless=new" ]]; then
+      headless_mode="new"
+    fi
+    python3 - "${metadata_path}" "${stem}" "${VIEWPORT_W}" "${VIEWPORT_H}" "${DPR}" "${JS,,}" "${headless_mode}" "${CHROME_VERSION}" "${base_url}" "${html_sha256}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+out_path = Path(sys.argv[1])
+stem = sys.argv[2]
+w = int(sys.argv[3])
+h = int(sys.argv[4])
+dpr = float(sys.argv[5])
+js = sys.argv[6]
+headless = sys.argv[7]
+chrome_version = sys.argv[8].strip()
+base_url = sys.argv[9].strip()
+html_sha256 = sys.argv[10].strip()
+
+data = {
+    "stem": stem,
+    "viewport": [w, h],
+    "dpr": dpr,
+    "js": js,
+    "headless": headless,
+    "html_sha256": html_sha256,
+}
+if chrome_version:
+    data["chrome_version"] = chrome_version
+if base_url:
+    data["base_url"] = base_url
+
+out_path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
+PY
     ok=$((ok + 1))
     echo "✓ ${stem}"
   else
@@ -470,6 +516,7 @@ echo
 echo "Done: ${ok} ok, ${fail} failed (out of ${total})"
 echo "PNGs:  ${OUT_DIR}/*.png"
 echo "Logs:  ${OUT_DIR}/*.chrome.log"
+echo "Meta:  ${OUT_DIR}/*.json"
 
 if [[ "${fail}" -gt 0 ]]; then
   exit 1

@@ -53,10 +53,11 @@ use fastrender::text::font_db::FontConfig;
 use image::RgbaImage;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use stage_buckets::StageBuckets;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Seek, SeekFrom, Write};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -506,6 +507,22 @@ struct RunArgs {
   /// When set, missing baseline PNGs are generated via `scripts/chrome_baseline.sh`.
   #[arg(long, value_enum, requires = "accuracy")]
   baseline: Option<AccuracyBaselineArg>,
+
+  /// Always regenerate Chrome baseline PNGs/metadata for the selected pages.
+  ///
+  /// Requires `--accuracy --baseline=chrome`.
+  #[arg(long, requires_all = ["accuracy", "baseline"])]
+  baseline_refresh: bool,
+
+  /// Regenerate Chrome baselines that have a PNG but are missing the metadata sidecar.
+  ///
+  /// This is useful for migrating older baseline directories (PNGs created before metadata
+  /// support). Without this flag, pageset_progress will warn that such baselines are unverified
+  /// but will not re-run Chrome by default.
+  ///
+  /// Requires `--accuracy --baseline=chrome`.
+  #[arg(long, requires_all = ["accuracy", "baseline"])]
+  baseline_refresh_if_unverified: bool,
 
   /// Per-channel tolerance for pixel diffs (0-255)
   #[arg(long, default_value_t = 0, requires = "accuracy")]
@@ -1322,7 +1339,11 @@ fn round_accuracy_metric(value: f64, places: u32) -> f64 {
 }
 
 impl ProgressAccuracy {
-  fn from_diff(diff: &image_compare::ImageDiff, baseline: &str, computed_at_commit: Option<&str>) -> Self {
+  fn from_diff(
+    diff: &image_compare::ImageDiff,
+    baseline: &str,
+    computed_at_commit: Option<&str>,
+  ) -> Self {
     Self {
       baseline: baseline.to_string(),
       diff_pixels: diff.statistics.different_pixels,
@@ -1366,7 +1387,8 @@ fn rgba_image_from_pixmap(pixmap: &Pixmap) -> Result<RgbaImage, String> {
     rgba_data.push(a);
   }
 
-  RgbaImage::from_raw(width, height, rgba_data).ok_or_else(|| "failed to create RGBA image".to_string())
+  RgbaImage::from_raw(width, height, rgba_data)
+    .ok_or_else(|| "failed to create RGBA image".to_string())
 }
 
 fn compute_accuracy_for_pixmap(
@@ -2925,8 +2947,7 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
           "Stage timings unavailable (no timeline or render stats); stages_ms left at 0ms.\n",
         );
       }
-      progress.hotspot =
-        infer_hotspot(diagnostics.stats.as_ref(), &progress.stages_ms).to_string();
+      progress.hotspot = infer_hotspot(diagnostics.stats.as_ref(), &progress.stages_ms).to_string();
       let format_summary = |label: &str, summary: &ProgressFetchErrorSummary| {
         let mut kind_parts = Vec::new();
         for (kind, count) in &summary.by_kind {
@@ -3098,9 +3119,7 @@ fn render_worker(args: WorkerArgs) -> io::Result<()> {
       ) {
         progress.accuracy = Some(accuracy);
         if let Err(err) = write_progress_fast(&args.progress_path, &progress) {
-          log.push_str(&format!(
-            "Accuracy: progress rewrite failed ({err})\n"
-          ));
+          log.push_str(&format!("Accuracy: progress rewrite failed ({err})\n"));
         }
       }
     }
@@ -5187,9 +5206,8 @@ fn report(args: ReportArgs) -> io::Result<()> {
 
   let mut progresses = read_progress_dir(&args.progress_dir)?;
   if let Some(filter) = page_filter.as_ref() {
-    progresses.retain(|entry| {
-      filter.matches_cache_stem(&entry.stem, pageset_stem(&entry.stem).as_deref())
-    });
+    progresses
+      .retain(|entry| filter.matches_cache_stem(&entry.stem, pageset_stem(&entry.stem).as_deref()));
   }
   let total_pages = progresses.len();
   let status_counts = summarize_status(&progresses);
@@ -5658,7 +5676,8 @@ fn report(args: ReportArgs) -> io::Result<()> {
   }
   println!();
 
-  let wants_accuracy_ranking = args.rank_accuracy || args.only_diff || args.min_diff_percent.is_some();
+  let wants_accuracy_ranking =
+    args.rank_accuracy || args.only_diff || args.min_diff_percent.is_some();
   if wants_accuracy_ranking {
     let mut accuracy_pages: Vec<(&LoadedProgress, &ProgressAccuracy)> = progresses
       .iter()
@@ -6801,23 +6820,209 @@ fn work_item_from_cache(
   }
 }
 
+#[derive(Debug, Deserialize)]
+struct ChromeBaselineMetadata {
+  stem: String,
+  #[serde(deserialize_with = "deserialize_baseline_viewport")]
+  viewport: (u32, u32),
+  dpr: f32,
+  js: String,
+  html_sha256: String,
+}
+
+fn deserialize_baseline_viewport<'de, D>(deserializer: D) -> Result<(u32, u32), D::Error>
+where
+  D: serde::de::Deserializer<'de>,
+{
+  struct ViewportVisitor;
+
+  impl<'de> serde::de::Visitor<'de> for ViewportVisitor {
+    type Value = (u32, u32);
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+      formatter.write_str("a viewport tuple [w, h] or string \"WxH\"")
+    }
+
+    fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+    where
+      A: serde::de::SeqAccess<'de>,
+    {
+      let w: u32 = seq
+        .next_element()?
+        .ok_or_else(|| serde::de::Error::invalid_length(0, &self))?;
+      let h: u32 = seq
+        .next_element()?
+        .ok_or_else(|| serde::de::Error::invalid_length(1, &self))?;
+      Ok((w, h))
+    }
+
+    fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+    where
+      E: serde::de::Error,
+    {
+      parse_viewport(value).map_err(serde::de::Error::custom)
+    }
+
+    fn visit_string<E>(self, value: String) -> Result<Self::Value, E>
+    where
+      E: serde::de::Error,
+    {
+      self.visit_str(&value)
+    }
+  }
+
+  deserializer.deserialize_any(ViewportVisitor)
+}
+
+fn sha256_file_hex(path: &Path) -> io::Result<String> {
+  let mut file = File::open(path)?;
+  let mut hasher = Sha256::new();
+  let mut buf = [0u8; 64 * 1024];
+  loop {
+    let n = file.read(&mut buf)?;
+    if n == 0 {
+      break;
+    }
+    hasher.update(&buf[..n]);
+  }
+  let digest = hasher.finalize();
+  let mut out = String::with_capacity(digest.len() * 2);
+  for byte in digest {
+    out.push_str(&format!("{byte:02x}"));
+  }
+  Ok(out)
+}
+
+fn dpr_matches_metadata(expected: f32, actual: f32) -> bool {
+  if !expected.is_finite() || !actual.is_finite() {
+    return false;
+  }
+  (expected - actual).abs() <= 0.0001
+}
+
+fn compute_needed_baselines(
+  baseline_dir: &Path,
+  items: &[WorkItem],
+  viewport: (u32, u32),
+  dpr: f32,
+  js: &str,
+  refresh_all: bool,
+  refresh_if_unverified: bool,
+) -> Vec<String> {
+  let expected_js = js.trim().to_ascii_lowercase();
+  let mut needed = BTreeSet::<String>::new();
+
+  for item in items {
+    let stem = item.cache_stem.as_str();
+    if refresh_all {
+      needed.insert(stem.to_string());
+      continue;
+    }
+
+    let png_path = baseline_dir.join(format!("{stem}.png"));
+    if !png_path.exists() {
+      needed.insert(stem.to_string());
+      continue;
+    }
+
+    let meta_path = baseline_dir.join(format!("{stem}.json"));
+    if !meta_path.exists() {
+      if refresh_if_unverified {
+        needed.insert(stem.to_string());
+      }
+      continue;
+    }
+
+    let meta_bytes = match fs::read(&meta_path) {
+      Ok(bytes) => bytes,
+      Err(_) => {
+        needed.insert(stem.to_string());
+        continue;
+      }
+    };
+
+    let meta: ChromeBaselineMetadata = match serde_json::from_slice(&meta_bytes) {
+      Ok(meta) => meta,
+      Err(_) => {
+        needed.insert(stem.to_string());
+        continue;
+      }
+    };
+
+    if meta.stem != stem {
+      needed.insert(stem.to_string());
+      continue;
+    }
+    if meta.viewport != viewport {
+      needed.insert(stem.to_string());
+      continue;
+    }
+    if !dpr_matches_metadata(meta.dpr, dpr) {
+      needed.insert(stem.to_string());
+      continue;
+    }
+    if meta.js.trim().to_ascii_lowercase() != expected_js {
+      needed.insert(stem.to_string());
+      continue;
+    }
+
+    let current_sha = match sha256_file_hex(&item.cache_path) {
+      Ok(value) => value,
+      Err(_) => {
+        needed.insert(stem.to_string());
+        continue;
+      }
+    };
+    if meta.html_sha256.trim().to_ascii_lowercase() != current_sha {
+      needed.insert(stem.to_string());
+      continue;
+    }
+  }
+
+  needed.into_iter().collect()
+}
+
 fn generate_missing_chrome_baselines(
   baseline_dir: &Path,
   items: &[WorkItem],
   viewport: (u32, u32),
   dpr: f32,
+  baseline_refresh: bool,
+  baseline_refresh_if_unverified: bool,
 ) {
-  let mut missing: Vec<String> = items
+  let expected_js = "off";
+
+  let mut unverified: Vec<String> = items
     .iter()
     .filter(|item| {
-      let path = baseline_dir.join(format!("{}.png", item.cache_stem));
-      !path.exists()
+      let stem = item.cache_stem.as_str();
+      baseline_dir.join(format!("{stem}.png")).exists()
+        && !baseline_dir.join(format!("{stem}.json")).exists()
     })
     .map(|item| item.cache_stem.clone())
     .collect();
-  missing.sort();
-  missing.dedup();
-  if missing.is_empty() {
+  unverified.sort();
+  unverified.dedup();
+  if !unverified.is_empty() && !(baseline_refresh || baseline_refresh_if_unverified) {
+    let suffix = if unverified.len() == 1 { "" } else { "s" };
+    eprintln!(
+      "Warning: chrome baseline PNG{suffix} exist but metadata sidecars are missing for {} page{suffix}. These baselines are unverified and may be stale if cached HTML/viewport/DPR changed.\n\
+       Re-run with --baseline-refresh-if-unverified (or --baseline-refresh) to regenerate: {}",
+      unverified.len(),
+      unverified.join(", ")
+    );
+  }
+
+  let needed = compute_needed_baselines(
+    baseline_dir,
+    items,
+    viewport,
+    dpr,
+    expected_js,
+    baseline_refresh,
+    baseline_refresh_if_unverified,
+  );
+  if needed.is_empty() {
     return;
   }
 
@@ -6839,10 +7044,22 @@ fn generate_missing_chrome_baselines(
   }
 
   println!(
-    "Generating {} missing chrome baseline PNG(s) into {}...",
-    missing.len(),
+    "Generating {} chrome baseline PNG(s) into {}...",
+    needed.len(),
     baseline_dir.display()
   );
+
+  for stem in &needed {
+    for path in [
+      baseline_dir.join(format!("{stem}.png")),
+      baseline_dir.join(format!("{stem}.json")),
+      baseline_dir.join(format!("{stem}.chrome.log")),
+    ] {
+      if path.exists() {
+        let _ = fs::remove_file(path);
+      }
+    }
+  }
 
   let viewport_arg = format!("{}x{}", viewport.0, viewport.1);
   let status = Command::new(script)
@@ -6854,8 +7071,10 @@ fn generate_missing_chrome_baselines(
     .arg(&viewport_arg)
     .arg("--dpr")
     .arg(format!("{dpr}"))
+    .arg("--js")
+    .arg(expected_js)
     .arg("--")
-    .args(&missing)
+    .args(&needed)
     .status();
 
   match status {
@@ -7633,6 +7852,13 @@ fn run(mut args: RunArgs) -> io::Result<()> {
     args.baseline_dir = Some(resolved_baseline_dir);
   }
 
+  if args.baseline_refresh || args.baseline_refresh_if_unverified {
+    if args.baseline != Some(AccuracyBaselineArg::Chrome) {
+      eprintln!("--baseline-refresh* requires --baseline=chrome");
+      std::process::exit(2);
+    }
+  }
+
   let hard_timeout = Duration::from_secs(args.timeout);
   let soft_timeout_ms = compute_soft_timeout_ms(hard_timeout, args.soft_timeout_ms);
   let trace_hard_timeout = compute_trace_hard_timeout(args.timeout, args.trace_timeout);
@@ -8000,7 +8226,14 @@ fn run(mut args: RunArgs) -> io::Result<()> {
         .baseline_dir
         .as_ref()
         .expect("baseline_dir should be resolved when accuracy is enabled");
-      generate_missing_chrome_baselines(baseline_dir, &items, args.viewport, args.dpr);
+      generate_missing_chrome_baselines(
+        baseline_dir,
+        &items,
+        args.viewport,
+        args.dpr,
+        args.baseline_refresh,
+        args.baseline_refresh_if_unverified,
+      );
     }
   }
 
@@ -8463,7 +8696,10 @@ mod tests {
     let has_override = cmd
       .get_envs()
       .any(|(key, _)| key == OsStr::new(WORKER_RAYON_THREADS_ENV));
-    assert!(!has_override, "should not override explicit RAYON_NUM_THREADS");
+    assert!(
+      !has_override,
+      "should not override explicit RAYON_NUM_THREADS"
+    );
 
     match prev {
       Some(value) => std::env::set_var(WORKER_RAYON_THREADS_ENV, value),
@@ -8854,6 +9090,8 @@ mod tests {
       accuracy: false,
       baseline_dir: None,
       baseline: None,
+      baseline_refresh: false,
+      baseline_refresh_if_unverified: false,
       tolerance: 0,
       max_diff_percent: 0.0,
       diff_dir: None,
@@ -10410,6 +10648,203 @@ mod tests {
   }
 
   #[test]
+  fn chrome_baseline_needs_regeneration_when_html_sha256_mismatches() {
+    let dir = tempdir().expect("tempdir");
+    let baseline_dir = dir.path().join("baselines");
+    fs::create_dir_all(&baseline_dir).expect("baseline dir");
+
+    let html_dir = dir.path().join("html");
+    fs::create_dir_all(&html_dir).expect("html dir");
+    let html_path = html_dir.join("test.html");
+    fs::write(&html_path, "<html>one</html>").expect("write html");
+
+    let item = WorkItem {
+      stem: "test".to_string(),
+      cache_stem: "test".to_string(),
+      url: "https://example.com/".to_string(),
+      cache_path: html_path.clone(),
+      progress_path: PathBuf::new(),
+      log_path: PathBuf::new(),
+      stderr_path: PathBuf::new(),
+      stage_path: PathBuf::new(),
+      trace_out: None,
+    };
+
+    fs::write(baseline_dir.join("test.png"), b"png").expect("write png");
+    let meta = serde_json::json!({
+      "stem": "test",
+      "viewport": [1200, 800],
+      "dpr": 1.0,
+      "js": "off",
+      "headless": "new",
+      "html_sha256": "deadbeef"
+    });
+    fs::write(
+      baseline_dir.join("test.json"),
+      serde_json::to_vec_pretty(&meta).expect("meta json"),
+    )
+    .expect("write meta");
+
+    let needed = compute_needed_baselines(
+      &baseline_dir,
+      &[item],
+      (1200, 800),
+      1.0,
+      "off",
+      false,
+      false,
+    );
+    assert_eq!(needed, vec!["test".to_string()]);
+  }
+
+  #[test]
+  fn chrome_baseline_needs_regeneration_when_viewport_or_dpr_mismatches() {
+    let dir = tempdir().expect("tempdir");
+    let baseline_dir = dir.path().join("baselines");
+    fs::create_dir_all(&baseline_dir).expect("baseline dir");
+
+    let html_dir = dir.path().join("html");
+    fs::create_dir_all(&html_dir).expect("html dir");
+    let html_path = html_dir.join("test.html");
+    fs::write(&html_path, "<html>one</html>").expect("write html");
+    let sha = sha256_file_hex(&html_path).expect("sha");
+
+    let item = WorkItem {
+      stem: "test".to_string(),
+      cache_stem: "test".to_string(),
+      url: "https://example.com/".to_string(),
+      cache_path: html_path.clone(),
+      progress_path: PathBuf::new(),
+      log_path: PathBuf::new(),
+      stderr_path: PathBuf::new(),
+      stage_path: PathBuf::new(),
+      trace_out: None,
+    };
+
+    fs::write(baseline_dir.join("test.png"), b"png").expect("write png");
+    let meta = serde_json::json!({
+      "stem": "test",
+      "viewport": [1200, 800],
+      "dpr": 1.0,
+      "js": "off",
+      "headless": "new",
+      "html_sha256": sha
+    });
+    fs::write(
+      baseline_dir.join("test.json"),
+      serde_json::to_vec_pretty(&meta).expect("meta json"),
+    )
+    .expect("write meta");
+
+    let needed = compute_needed_baselines(
+      &baseline_dir,
+      &[item.clone()],
+      (1000, 800),
+      1.0,
+      "off",
+      false,
+      false,
+    );
+    assert_eq!(needed, vec!["test".to_string()]);
+
+    let needed = compute_needed_baselines(
+      &baseline_dir,
+      &[item],
+      (1200, 800),
+      2.0,
+      "off",
+      false,
+      false,
+    );
+    assert_eq!(needed, vec!["test".to_string()]);
+  }
+
+  #[test]
+  fn chrome_baseline_missing_metadata_is_not_regenerated_unless_requested() {
+    let dir = tempdir().expect("tempdir");
+    let baseline_dir = dir.path().join("baselines");
+    fs::create_dir_all(&baseline_dir).expect("baseline dir");
+
+    let html_dir = dir.path().join("html");
+    fs::create_dir_all(&html_dir).expect("html dir");
+    let html_path = html_dir.join("test.html");
+    fs::write(&html_path, "<html>one</html>").expect("write html");
+
+    let item = WorkItem {
+      stem: "test".to_string(),
+      cache_stem: "test".to_string(),
+      url: "https://example.com/".to_string(),
+      cache_path: html_path.clone(),
+      progress_path: PathBuf::new(),
+      log_path: PathBuf::new(),
+      stderr_path: PathBuf::new(),
+      stage_path: PathBuf::new(),
+      trace_out: None,
+    };
+
+    fs::write(baseline_dir.join("test.png"), b"png").expect("write png");
+
+    let needed = compute_needed_baselines(
+      &baseline_dir,
+      &[item.clone()],
+      (1200, 800),
+      1.0,
+      "off",
+      false,
+      false,
+    );
+    assert!(needed.is_empty());
+
+    let needed =
+      compute_needed_baselines(&baseline_dir, &[item], (1200, 800), 1.0, "off", false, true);
+    assert_eq!(needed, vec!["test".to_string()]);
+  }
+
+  #[test]
+  fn chrome_baseline_refresh_forces_regeneration() {
+    let dir = tempdir().expect("tempdir");
+    let baseline_dir = dir.path().join("baselines");
+    fs::create_dir_all(&baseline_dir).expect("baseline dir");
+
+    let html_dir = dir.path().join("html");
+    fs::create_dir_all(&html_dir).expect("html dir");
+    let html_path = html_dir.join("test.html");
+    fs::write(&html_path, "<html>one</html>").expect("write html");
+    let sha = sha256_file_hex(&html_path).expect("sha");
+
+    let item = WorkItem {
+      stem: "test".to_string(),
+      cache_stem: "test".to_string(),
+      url: "https://example.com/".to_string(),
+      cache_path: html_path.clone(),
+      progress_path: PathBuf::new(),
+      log_path: PathBuf::new(),
+      stderr_path: PathBuf::new(),
+      stage_path: PathBuf::new(),
+      trace_out: None,
+    };
+
+    fs::write(baseline_dir.join("test.png"), b"png").expect("write png");
+    let meta = serde_json::json!({
+      "stem": "test",
+      "viewport": [1200, 800],
+      "dpr": 1.0,
+      "js": "off",
+      "headless": "new",
+      "html_sha256": sha
+    });
+    fs::write(
+      baseline_dir.join("test.json"),
+      serde_json::to_vec_pretty(&meta).expect("meta json"),
+    )
+    .expect("write meta");
+
+    let needed =
+      compute_needed_baselines(&baseline_dir, &[item], (1200, 800), 1.0, "off", true, false);
+    assert_eq!(needed, vec!["test".to_string()]);
+  }
+
+  #[test]
   fn page_progress_deserializes_without_accuracy_section() {
     let raw = serde_json::json!({
       "url": "https://example.com/",
@@ -10423,7 +10858,10 @@ mod tests {
     })
     .to_string();
     let parsed: PageProgress = serde_json::from_str(&raw).expect("deserialize PageProgress");
-    assert!(parsed.accuracy.is_none(), "expected accuracy to be optional");
+    assert!(
+      parsed.accuracy.is_none(),
+      "expected accuracy to be optional"
+    );
   }
 
   #[test]
@@ -10464,8 +10902,7 @@ mod tests {
     let rendered_img =
       image_compare::decode_png(&rendered_bytes).expect("decode rendered fixture PNG");
 
-    let mut pixmap =
-      Pixmap::new(rendered_img.width(), rendered_img.height()).expect("pixmap");
+    let mut pixmap = Pixmap::new(rendered_img.width(), rendered_img.height()).expect("pixmap");
     pixmap
       .data_mut()
       .copy_from_slice(rendered_img.as_raw().as_slice());
