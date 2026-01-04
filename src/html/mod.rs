@@ -163,9 +163,10 @@ mod tests {
 
   #[test]
   fn find_base_href_ignores_template_only_base() {
-    let dom =
-      parse_html("<html><head><template><base href=\"https://bad.example/\"></template></head></html>")
-        .unwrap();
+    let dom = parse_html(
+      "<html><head><template><base href=\"https://bad.example/\"></template></head></html>",
+    )
+    .unwrap();
 
     assert_eq!(find_base_href(&dom), None);
   }

@@ -72,13 +72,11 @@ fn file_document_base_like_text_in_script_does_not_override_inferred_origin() {
   let document_url = "file:///tmp/cache/good.example.html";
   let stylesheet_url = "https://good.example/style.css";
 
-  let fetcher = Arc::new(
-    RecordingRequestFetcher::default().with_entry(
-      stylesheet_url,
-      "body { color: rgb(1, 2, 3); }",
-      "text/css",
-    ),
-  );
+  let fetcher = Arc::new(RecordingRequestFetcher::default().with_entry(
+    stylesheet_url,
+    "body { color: rgb(1, 2, 3); }",
+    "text/css",
+  ));
   let toggles = RuntimeToggles::from_map(HashMap::from([(
     "FASTR_FETCH_LINK_CSS".to_string(),
     "1".to_string(),
@@ -115,13 +113,11 @@ fn file_document_relative_base_href_resolves_against_inferred_origin() {
   let document_url = "file:///tmp/cache/good.example.html";
   let stylesheet_url = "https://good.example/assets/style.css";
 
-  let fetcher = Arc::new(
-    RecordingRequestFetcher::default().with_entry(
-      stylesheet_url,
-      "body { color: rgb(1, 2, 3); }",
-      "text/css",
-    ),
-  );
+  let fetcher = Arc::new(RecordingRequestFetcher::default().with_entry(
+    stylesheet_url,
+    "body { color: rgb(1, 2, 3); }",
+    "text/css",
+  ));
   let toggles = RuntimeToggles::from_map(HashMap::from([(
     "FASTR_FETCH_LINK_CSS".to_string(),
     "1".to_string(),
@@ -148,3 +144,86 @@ fn file_document_relative_base_href_resolves_against_inferred_origin() {
   assert_eq!(stylesheet_request.referrer.as_deref(), Some(document_url));
 }
 
+#[test]
+fn file_document_relative_canonical_influences_relative_base_href_resolution() {
+  let html = r#"<!doctype html><html><head>
+    <link rel="canonical" href="/app/">
+    <base href="assets/">
+    <link rel="stylesheet" href="style.css">
+  </head><body></body></html>"#;
+
+  let document_url = "file:///tmp/cache/good.example.html";
+  let stylesheet_url = "https://good.example/app/assets/style.css";
+
+  let fetcher = Arc::new(RecordingRequestFetcher::default().with_entry(
+    stylesheet_url,
+    "body { color: rgb(1, 2, 3); }",
+    "text/css",
+  ));
+  let toggles = RuntimeToggles::from_map(HashMap::from([(
+    "FASTR_FETCH_LINK_CSS".to_string(),
+    "1".to_string(),
+  )]));
+  let config = FastRenderConfig::default().with_runtime_toggles(toggles);
+  let mut renderer =
+    FastRender::with_config_and_fetcher(config, Some(fetcher.clone() as Arc<dyn ResourceFetcher>))
+      .unwrap();
+
+  renderer
+    .render_html_with_stylesheets(
+      html,
+      document_url,
+      RenderOptions::new().with_viewport(64, 64),
+    )
+    .unwrap();
+
+  let requests = fetcher.requests();
+  let stylesheet_request = requests
+    .iter()
+    .find(|request| request.destination == FetchDestination::Style)
+    .expect("stylesheet request");
+  assert_eq!(stylesheet_request.url, stylesheet_url);
+  assert_eq!(stylesheet_request.referrer.as_deref(), Some(document_url));
+}
+
+#[test]
+fn file_document_relative_og_url_influences_relative_base_href_resolution() {
+  let html = r#"<!doctype html><html><head>
+    <meta property="og:url" content="/app/">
+    <base href="assets/">
+    <link rel="stylesheet" href="style.css">
+  </head><body></body></html>"#;
+
+  let document_url = "file:///tmp/cache/good.example.html";
+  let stylesheet_url = "https://good.example/app/assets/style.css";
+
+  let fetcher = Arc::new(RecordingRequestFetcher::default().with_entry(
+    stylesheet_url,
+    "body { color: rgb(1, 2, 3); }",
+    "text/css",
+  ));
+  let toggles = RuntimeToggles::from_map(HashMap::from([(
+    "FASTR_FETCH_LINK_CSS".to_string(),
+    "1".to_string(),
+  )]));
+  let config = FastRenderConfig::default().with_runtime_toggles(toggles);
+  let mut renderer =
+    FastRender::with_config_and_fetcher(config, Some(fetcher.clone() as Arc<dyn ResourceFetcher>))
+      .unwrap();
+
+  renderer
+    .render_html_with_stylesheets(
+      html,
+      document_url,
+      RenderOptions::new().with_viewport(64, 64),
+    )
+    .unwrap();
+
+  let requests = fetcher.requests();
+  let stylesheet_request = requests
+    .iter()
+    .find(|request| request.destination == FetchDestination::Style)
+    .expect("stylesheet request");
+  assert_eq!(stylesheet_request.url, stylesheet_url);
+  assert_eq!(stylesheet_request.referrer.as_deref(), Some(document_url));
+}

@@ -6038,13 +6038,28 @@ impl FastRender {
     let base_href = crate::html::find_base_href(dom);
 
     let is_http_base = |url: &str| url.starts_with("http://") || url.starts_with("https://");
+    let resolve_http_hint =
+      |doc_url: &str, inferred_base: Option<&str>, value: &str| -> Option<String> {
+        resolve_href(doc_url, value)
+          .filter(|resolved| is_http_base(resolved))
+          .or_else(|| {
+            inferred_base
+              .and_then(|base| resolve_href(base, value))
+              .filter(|resolved| is_http_base(resolved))
+          })
+      };
 
     fn find_head(node: &DomNode) -> Option<&DomNode> {
       if matches!(node.node_type, DomNodeType::ShadowRoot { .. }) {
         return None;
       }
       if let Some(tag) = node.tag_name() {
-        if tag.eq_ignore_ascii_case("head") && node.namespace() == Some(crate::dom::HTML_NAMESPACE) {
+        if tag.eq_ignore_ascii_case("head")
+          && matches!(
+            node.namespace(),
+            Some(ns) if ns.is_empty() || ns == crate::dom::HTML_NAMESPACE
+          )
+        {
           return Some(node);
         }
         if tag.eq_ignore_ascii_case("template") {
@@ -6068,7 +6083,10 @@ impl FastRender {
           return None;
         }
         if tag.eq_ignore_ascii_case("link") {
-          if node.namespace() != Some(crate::dom::HTML_NAMESPACE) {
+          if !matches!(
+            node.namespace(),
+            Some(ns) if ns.is_empty() || ns == crate::dom::HTML_NAMESPACE
+          ) {
             return None;
           }
           if let Some(rel) = node.get_attribute_ref("rel") {
@@ -6103,7 +6121,10 @@ impl FastRender {
           return None;
         }
         if tag.eq_ignore_ascii_case("meta") {
-          if node.namespace() != Some(crate::dom::HTML_NAMESPACE) {
+          if !matches!(
+            node.namespace(),
+            Some(ns) if ns.is_empty() || ns == crate::dom::HTML_NAMESPACE
+          ) {
             return None;
           }
           if node
@@ -6152,18 +6173,17 @@ impl FastRender {
     let file_http_base = match document_url {
       Some(doc_url) if doc_url.starts_with("file://") => {
         let head = find_head(dom);
+        let inferred_base = infer_http_base_from_file_url(doc_url);
         let canonical = head
           .and_then(find_first_canonical_href)
-          .and_then(|href| resolve_href(doc_url, &href))
-          .filter(|resolved| is_http_base(resolved));
+          .and_then(|href| resolve_http_hint(doc_url, inferred_base.as_deref(), &href));
         if canonical.is_some() {
           canonical
         } else {
           head
             .and_then(find_first_og_url)
-            .and_then(|content| resolve_href(doc_url, &content))
-            .filter(|resolved| is_http_base(resolved))
-            .or_else(|| infer_http_base_from_file_url(doc_url))
+            .and_then(|content| resolve_http_hint(doc_url, inferred_base.as_deref(), &content))
+            .or_else(|| inferred_base)
         }
       }
       _ => None,

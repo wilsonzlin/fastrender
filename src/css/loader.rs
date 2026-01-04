@@ -2110,7 +2110,10 @@ pub fn infer_document_url_guess_from_dom<'a>(dom: &DomNode, input_url: &'a str) 
   infer_document_url_guess_from_dom_with_input(dom, input)
 }
 
-fn infer_document_url_guess_from_dom_with_input<'a>(dom: &DomNode, input: Cow<'a, str>) -> Cow<'a, str> {
+fn infer_document_url_guess_from_dom_with_input<'a>(
+  dom: &DomNode,
+  input: Cow<'a, str>,
+) -> Cow<'a, str> {
   if !is_file_url(input.as_ref()) {
     return input;
   }
@@ -2123,7 +2126,9 @@ fn infer_document_url_guess_from_dom_with_input<'a>(dom: &DomNode, input: Cow<'a
       return None;
     }
     if let Some(tag) = node.tag_name() {
-      if tag.eq_ignore_ascii_case("head") && node.namespace() == Some(HTML_NAMESPACE) {
+      if tag.eq_ignore_ascii_case("head")
+        && matches!(node.namespace(), Some(ns) if ns.is_empty() || ns == HTML_NAMESPACE)
+      {
         return Some(node);
       }
     }
@@ -2142,8 +2147,10 @@ fn infer_document_url_guess_from_dom_with_input<'a>(dom: &DomNode, input: Cow<'a
     if node.is_template_element() {
       return None;
     }
-    if node.tag_name().is_some_and(|tag| tag.eq_ignore_ascii_case("link"))
-      && node.namespace() == Some(HTML_NAMESPACE)
+    if node
+      .tag_name()
+      .is_some_and(|tag| tag.eq_ignore_ascii_case("link"))
+      && matches!(node.namespace(), Some(ns) if ns.is_empty() || ns == HTML_NAMESPACE)
     {
       if let Some(rel) = node.get_attribute_ref("rel") {
         if rel
@@ -2178,8 +2185,10 @@ fn infer_document_url_guess_from_dom_with_input<'a>(dom: &DomNode, input: Cow<'a
     if node.is_template_element() {
       return None;
     }
-    if node.tag_name().is_some_and(|tag| tag.eq_ignore_ascii_case("meta"))
-      && node.namespace() == Some(HTML_NAMESPACE)
+    if node
+      .tag_name()
+      .is_some_and(|tag| tag.eq_ignore_ascii_case("meta"))
+      && matches!(node.namespace(), Some(ns) if ns.is_empty() || ns == HTML_NAMESPACE)
     {
       if node
         .get_attribute_ref("property")
@@ -2211,6 +2220,18 @@ fn infer_document_url_guess_from_dom_with_input<'a>(dom: &DomNode, input: Cow<'a
   }
   if let Some(og_url) = find_first_http_og_url(scope, input.as_ref()) {
     return Cow::Owned(og_url);
+  }
+  // Some cached pages use a relative canonical/og:url hint (e.g. `href="/path/page"`), which
+  // would resolve to a `file://` URL when joined against the cached file path. When we can infer
+  // the original host from the cache filename (e.g. `{host}.html`), retry resolution against that
+  // inferred http(s) base so relative hints still influence `<base href>` resolution.
+  if let Some(http_base) = infer_http_base_from_file_url(input.as_ref()) {
+    if let Some(canonical) = find_first_http_canonical(scope, &http_base) {
+      return Cow::Owned(canonical);
+    }
+    if let Some(og_url) = find_first_http_og_url(scope, &http_base) {
+      return Cow::Owned(og_url);
+    }
   }
   infer_document_url_guess_without_dom(input)
 }
@@ -3023,6 +3044,15 @@ mod tests {
   }
 
   #[test]
+  fn uses_relative_canonical_hint_for_file_inputs() {
+    let html = r#"
+            <link rel="canonical" href="/app/">
+        "#;
+    let base = infer_base_url(html, "file:///tmp/cache/example.net.html");
+    assert_eq!(base, "https://example.net/app/");
+  }
+
+  #[test]
   fn uses_single_quoted_canonical_for_file_inputs() {
     let html = r#"
             <link rel='canonical' href='https://example.net/single/'>
@@ -3213,6 +3243,20 @@ mod tests {
   #[test]
   fn infer_base_url_resolves_relative_base_against_canonical_for_file_input() {
     let html = "<link rel=canonical href='https://example.com/app/'><base href='assets/'>";
+    let base = infer_base_url(html, "file:///tmp/cache/example.com.html").into_owned();
+    assert_eq!(base, "https://example.com/app/assets/");
+  }
+
+  #[test]
+  fn infer_base_url_resolves_relative_base_against_relative_canonical_for_file_input() {
+    let html = "<link rel=canonical href='/app/'><base href='assets/'>";
+    let base = infer_base_url(html, "file:///tmp/cache/example.com.html").into_owned();
+    assert_eq!(base, "https://example.com/app/assets/");
+  }
+
+  #[test]
+  fn infer_base_url_resolves_relative_base_against_relative_og_url_for_file_input() {
+    let html = "<meta property='og:url' content='/app/'><base href='assets/'>";
     let base = infer_base_url(html, "file:///tmp/cache/example.com.html").into_owned();
     assert_eq!(base, "https://example.com/app/assets/");
   }
