@@ -14816,6 +14816,107 @@ mod tests {
   }
 
   #[test]
+  fn registered_custom_property_initial_keyword_resets_to_guaranteed_invalid() {
+    let mut registry = CustomPropertyRegistry::new();
+    registry.register(PropertyRule {
+      name: "--x".to_string(),
+      syntax: CustomPropertySyntax::Universal,
+      inherits: false,
+      initial_value: None,
+    });
+    let mut styles = ComputedStyle::default();
+    styles.custom_property_registry = Arc::new(registry);
+    let parent = ComputedStyle::default();
+
+    apply_declaration(
+      &mut styles,
+      &Declaration {
+        property: "--x".into(),
+        value: PropertyValue::Custom("initial".to_string()),
+        contains_var: false,
+        raw_value: String::new(),
+        important: false,
+      },
+      &parent,
+      16.0,
+      16.0,
+    );
+
+    assert!(styles.custom_properties.get("--x").is_none());
+
+    let var_value = PropertyValue::Keyword("var(--x,)".to_string());
+    let resolved = resolve_var_for_property(&var_value, &styles.custom_properties, "");
+    let VarResolutionResult::Resolved { css_text, .. } = resolved else {
+      panic!("expected resolved var() value, got {resolved:?}");
+    };
+    assert_eq!(css_text.as_ref(), "");
+  }
+
+  #[test]
+  fn registered_custom_property_initial_keyword_uses_registered_initial_value() {
+    let mut registry = CustomPropertyRegistry::new();
+    registry.register(PropertyRule {
+      name: "--x".to_string(),
+      syntax: CustomPropertySyntax::Universal,
+      inherits: false,
+      initial_value: Some(CustomPropertyValue::new("0", None)),
+    });
+    let mut styles = ComputedStyle::default();
+    styles.custom_property_registry = Arc::new(registry);
+    styles
+      .custom_properties
+      .insert("--x".into(), CustomPropertyValue::new("1", None));
+    let parent = ComputedStyle::default();
+
+    apply_declaration(
+      &mut styles,
+      &Declaration {
+        property: "--x".into(),
+        value: PropertyValue::Custom("initial".to_string()),
+        contains_var: false,
+        raw_value: String::new(),
+        important: false,
+      },
+      &parent,
+      16.0,
+      16.0,
+    );
+
+    let value = styles
+      .custom_properties
+      .get("--x")
+      .expect("custom property");
+    assert_eq!(value.value, "0");
+    assert!(value.typed.is_none());
+  }
+
+  #[test]
+  fn unregistered_custom_property_initial_keyword_is_literal() {
+    let mut styles = ComputedStyle::default();
+    let parent = ComputedStyle::default();
+
+    apply_declaration(
+      &mut styles,
+      &Declaration {
+        property: "--x".into(),
+        value: PropertyValue::Custom("initial".to_string()),
+        contains_var: false,
+        raw_value: String::new(),
+        important: false,
+      },
+      &parent,
+      16.0,
+      16.0,
+    );
+
+    let value = styles
+      .custom_properties
+      .get("--x")
+      .expect("custom property");
+    assert_eq!(value.value, "initial");
+  }
+
+  #[test]
   fn parses_word_break_anywhere() {
     let mut style = ComputedStyle::default();
     apply_declaration(
