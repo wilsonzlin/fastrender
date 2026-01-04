@@ -167,7 +167,21 @@ struct FixtureReportRow {
   imported: StepResult,
 }
 
-pub fn run_recapture_page_fixtures(args: RecapturePageFixturesArgs) -> Result<()> {
+pub fn run_recapture_page_fixtures(mut args: RecapturePageFixturesArgs) -> Result<()> {
+  let repo_root = crate::repo_root();
+  if !args.manifest.is_absolute() {
+    args.manifest = repo_root.join(&args.manifest);
+  }
+  if !args.fixtures_root.is_absolute() {
+    args.fixtures_root = repo_root.join(&args.fixtures_root);
+  }
+  if !args.bundle_out_dir.is_absolute() {
+    args.bundle_out_dir = repo_root.join(&args.bundle_out_dir);
+  }
+  if !args.asset_cache_dir.is_absolute() {
+    args.asset_cache_dir = repo_root.join(&args.asset_cache_dir);
+  }
+
   let fixtures = load_manifest(&args.manifest)?;
   if fixtures.is_empty() {
     bail!("manifest {} contains no fixtures", args.manifest.display());

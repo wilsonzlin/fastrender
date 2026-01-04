@@ -192,7 +192,21 @@ struct PagesetGuardrailsFixture {
   budget_ms: Option<f64>,
 }
 
-pub fn run_update_pageset_guardrails(args: UpdatePagesetGuardrailsArgs) -> Result<()> {
+pub fn run_update_pageset_guardrails(mut args: UpdatePagesetGuardrailsArgs) -> Result<()> {
+  let repo_root = crate::repo_root();
+  if !args.progress_dir.is_absolute() {
+    args.progress_dir = repo_root.join(&args.progress_dir);
+  }
+  if !args.manifest.is_absolute() {
+    args.manifest = repo_root.join(&args.manifest);
+  }
+  if !args.fixtures_root.is_absolute() {
+    args.fixtures_root = repo_root.join(&args.fixtures_root);
+  }
+  if !args.asset_cache_dir.is_absolute() {
+    args.asset_cache_dir = repo_root.join(&args.asset_cache_dir);
+  }
+
   if args.dry_run && args.capture_missing_fixtures {
     bail!("cannot combine --dry-run with --capture-missing-fixtures");
   }
@@ -357,7 +371,9 @@ requested --count={count}. The manifest will include all failures and {ok_pages}
 }
 
 fn default_bundle_path(name: &str) -> PathBuf {
-  PathBuf::from("target/pageset-guardrails/bundles").join(format!("{name}.tar"))
+  crate::repo_root()
+    .join("target/pageset-guardrails/bundles")
+    .join(format!("{name}.tar"))
 }
 
 fn normalize_manifest_path(path: &Path) -> PathBuf {

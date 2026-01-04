@@ -120,7 +120,14 @@ struct BudgetUpdateSummary {
   missing: Vec<String>,
 }
 
-pub fn run_update_pageset_guardrails_budgets(args: UpdatePagesetGuardrailsBudgetsArgs) -> Result<()> {
+pub fn run_update_pageset_guardrails_budgets(
+  mut args: UpdatePagesetGuardrailsBudgetsArgs,
+) -> Result<()> {
+  let repo_root = crate::repo_root();
+  if !args.manifest.is_absolute() {
+    args.manifest = repo_root.join(&args.manifest);
+  }
+
   if !args.dry_run && !args.write {
     bail!("pass exactly one of --dry-run or --write");
   }
