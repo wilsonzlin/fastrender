@@ -406,6 +406,12 @@ struct DiffRendersArgs {
   #[arg(long)]
   fail_on_differences: bool,
 
+  /// Skip building `diff_renders` and reuse an existing `target/release/diff_renders` binary.
+  ///
+  /// Useful when iterating quickly on report parameters without rebuilding.
+  #[arg(long)]
+  no_build: bool,
+
   /// Per-channel tolerance (0 = exact match, 5-10 to ignore tiny AA differences)
   #[arg(long, default_value_t = 0)]
   threshold: u8,
@@ -1614,16 +1620,25 @@ fn run_diff_renders(args: DiffRendersArgs) -> Result<()> {
   // binary returns exit code 1 when diffs are found, and `cargo run` would print a scary
   // "process didn't exit successfully" error even though we still want to keep the report.
   let repo_root = repo_root();
-  let mut build_cmd = Command::new("cargo");
-  build_cmd
-    .arg("build")
-    .arg("--release")
-    .args(["--bin", "diff_renders"])
-    .current_dir(&repo_root);
-  println!("Building diff_renders...");
-  run_command(build_cmd)?;
-
   let exe = diff_renders_executable(&repo_root);
+  if args.no_build {
+    if !exe.is_file() {
+      bail!(
+        "--no-build was set, but diff_renders executable does not exist at {}",
+        exe.display()
+      );
+    }
+  } else {
+    let mut build_cmd = Command::new("cargo");
+    build_cmd
+      .arg("build")
+      .arg("--release")
+      .args(["--bin", "diff_renders"])
+      .current_dir(&repo_root);
+    println!("Building diff_renders...");
+    run_command(build_cmd)?;
+  }
+
   let mut cmd = Command::new(&exe);
   cmd
     .arg("--before")
