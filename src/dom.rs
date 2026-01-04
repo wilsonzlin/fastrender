@@ -341,6 +341,19 @@ fn node_is_html_element(node: &DomNode) -> bool {
   )
 }
 
+#[inline]
+fn node_is_html_template_element(node: &DomNode) -> bool {
+  matches!(
+    node.node_type,
+    DomNodeType::Element {
+      ref tag_name,
+      ref namespace,
+      ..
+    } if (namespace.is_empty() || namespace == HTML_NAMESPACE)
+      && tag_name.eq_ignore_ascii_case("template")
+  )
+}
+
 const SELECTOR_BLOOM_ASCII_LOWERCASE_STACK_BUF: usize = 64;
 
 #[inline]
@@ -756,6 +769,7 @@ fn build_selector_bloom_store_impl<const WORDS: usize>(
     id: usize,
     is_element: bool,
     is_shadow_root: bool,
+    is_template: bool,
     next_child: usize,
     summary: [u64; WORDS],
   }
@@ -776,6 +790,7 @@ fn build_selector_bloom_store_impl<const WORDS: usize>(
     id: root_id,
     is_element: root_is_element,
     is_shadow_root: matches!(root.node_type, DomNodeType::ShadowRoot { .. }),
+    is_template: node_is_html_template_element(root),
     next_child: 0,
     summary: root_summary,
   });
@@ -802,6 +817,7 @@ fn build_selector_bloom_store_impl<const WORDS: usize>(
         id: child_id,
         is_element: child_is_element,
         is_shadow_root: matches!(child.node_type, DomNodeType::ShadowRoot { .. }),
+        is_template: node_is_html_template_element(child),
         next_child: 0,
         summary: child_summary,
       });
@@ -813,7 +829,7 @@ fn build_selector_bloom_store_impl<const WORDS: usize>(
     }
 
     if let Some(parent) = stack.last_mut() {
-      if parent.is_element && !frame.is_shadow_root {
+      if parent.is_element && !parent.is_template && !frame.is_shadow_root {
         merge_summary(&mut parent.summary, &frame.summary);
       }
     }
@@ -854,8 +870,10 @@ fn build_selector_bloom_map_legacy<const WORDS: usize>(
         Some(walk(child, map))
       };
       if node.is_element() {
-        if let Some(summary_child) = child_summary.as_ref() {
-          merge_summary(&mut summary, summary_child);
+        if !node_is_html_template_element(node) {
+          if let Some(summary_child) = child_summary.as_ref() {
+            merge_summary(&mut summary, summary_child);
+          }
         }
       }
     }
@@ -6013,43 +6031,47 @@ fn match_relative_selector_descendants<'a>(
       }
     }
     let mut found = false;
-    for child in anchor.children.iter().filter(|c| c.is_element()) {
-      if let Err(err) = check_active_periodic(
-        deadline_counter,
-        RELATIVE_SELECTOR_DEADLINE_STRIDE,
-        RenderStage::Cascade,
-      ) {
-        context.extra_data.record_deadline_error(err);
-        found = false;
-        break;
-      }
-      let child_ref = ElementRef::with_ancestors(child, ancestors.as_slice())
-        .with_slot_map(context.extra_data.slot_map)
-        .with_attr_cache(context.extra_data.element_attr_cache);
-      let mut matched = if use_ancestor_bloom && !selector_may_match(ancestor_hashes, bloom_filter)
-      {
-        false
-      } else {
-        matches_selector(&selector.selector, 0, None, &child_ref, context)
-      };
-      if context.extra_data.deadline_error.is_some() {
-        found = false;
-        break;
-      }
-      if !matched && selector.match_hint.is_subtree() {
-        matched = match_relative_selector_subtree(
-          selector,
-          child,
-          ancestors,
-          bloom_filter,
-          use_ancestor_bloom,
-          context,
+    // HTML templates are inert and their contents are not DOM children.
+    // Keep the `<template>` element itself matchable, but do not traverse into its contents.
+    if !node_is_html_template_element(anchor) {
+      for child in anchor.children.iter().filter(|c| c.is_element()) {
+        if let Err(err) = check_active_periodic(
           deadline_counter,
-        );
-      }
-      if matched {
-        found = true;
-        break;
+          RELATIVE_SELECTOR_DEADLINE_STRIDE,
+          RenderStage::Cascade,
+        ) {
+          context.extra_data.record_deadline_error(err);
+          found = false;
+          break;
+        }
+        let child_ref = ElementRef::with_ancestors(child, ancestors.as_slice())
+          .with_slot_map(context.extra_data.slot_map)
+          .with_attr_cache(context.extra_data.element_attr_cache);
+        let mut matched =
+          if use_ancestor_bloom && !selector_may_match(ancestor_hashes, bloom_filter) {
+            false
+          } else {
+            matches_selector(&selector.selector, 0, None, &child_ref, context)
+          };
+        if context.extra_data.deadline_error.is_some() {
+          found = false;
+          break;
+        }
+        if !matched && selector.match_hint.is_subtree() {
+          matched = match_relative_selector_subtree(
+            selector,
+            child,
+            ancestors,
+            bloom_filter,
+            use_ancestor_bloom,
+            context,
+            deadline_counter,
+          );
+        }
+        if matched {
+          found = true;
+          break;
+        }
       }
     }
     if use_ancestor_bloom {
@@ -6142,6 +6164,9 @@ fn match_relative_selector_subtree<'a>(
   deadline_counter: &mut usize,
 ) -> bool {
   debug_assert!(selector.match_hint.is_subtree());
+  if node_is_html_template_element(node) {
+    return false;
+  }
 
   // The u8-backed counting bloom filter saturates at 0xff and cannot be decremented once
   // saturated to avoid false negatives. On extremely deep trees this can prevent the filter
@@ -6261,14 +6286,17 @@ fn match_relative_selector_subtree<'a>(
       break;
     }
 
-    ancestors.push(child);
-    let child_bloomed = use_ancestor_bloom && stack.len() < ANCESTOR_BLOOM_MAX_DEPTH;
-    push_bloom(child, bloom_filter, child_bloomed, element_attr_cache);
-    stack.push(Frame {
-      node: child,
-      next_child: 0,
-      bloomed: child_bloomed,
-    });
+    // HTML templates are inert: do not traverse into their contents.
+    if !node_is_html_template_element(child) {
+      ancestors.push(child);
+      let child_bloomed = use_ancestor_bloom && stack.len() < ANCESTOR_BLOOM_MAX_DEPTH;
+      push_bloom(child, bloom_filter, child_bloomed, element_attr_cache);
+      stack.push(Frame {
+        node: child,
+        next_child: 0,
+        bloomed: child_bloomed,
+      });
+    }
   }
 
   while let Some(frame) = stack.pop() {
