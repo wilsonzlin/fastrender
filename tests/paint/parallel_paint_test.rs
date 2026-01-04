@@ -15,6 +15,7 @@ use fastrender::style::types::{
 use fastrender::text::font_loader::FontContext;
 use fastrender::{BorderRadii, Length, LengthUnit, Point, Rect, Rgba};
 use rayon::ThreadPoolBuilder;
+use std::sync::Arc;
 use std::time::Duration;
 use tiny_skia::Pixmap;
 
@@ -447,6 +448,161 @@ fn stacking_context_isolated_layer_matches_serial_output() {
 
   assert!(report.parallel_used, "expected tiling to be used");
   assert_pixmap_eq(&serial, &report.pixmap);
+}
+
+#[test]
+fn svg_filter_and_rounded_clip_match_serial_output_in_translated_tiles() {
+  use fastrender::paint::svg_filter::{
+    ColorInterpolationFilters, FilterPrimitive, FilterStep, SvgFilter, SvgFilterRegion,
+    SvgFilterUnits, SvgLength,
+  };
+
+  let mut list = DisplayList::new();
+  list.push(DisplayItem::FillRect(FillRectItem {
+    rect: Rect::from_xywh(0.0, 0.0, 256.0, 256.0),
+    color: Rgba::WHITE,
+  }));
+
+  let mut filter = SvgFilter {
+    color_interpolation_filters: ColorInterpolationFilters::SRGB,
+    steps: vec![FilterStep {
+      result: None,
+      color_interpolation_filters: None,
+      primitive: FilterPrimitive::Flood {
+        color: Rgba::new(20, 120, 220, 1.0),
+        opacity: 1.0,
+      },
+      region: None,
+    }],
+    region: SvgFilterRegion {
+      x: SvgLength::Percent(0.0),
+      y: SvgLength::Percent(0.0),
+      width: SvgLength::Percent(1.0),
+      height: SvgLength::Percent(1.0),
+      units: SvgFilterUnits::ObjectBoundingBox,
+    },
+    filter_res: None,
+    primitive_units: SvgFilterUnits::ObjectBoundingBox,
+    fingerprint: 0,
+  };
+  filter.refresh_fingerprint();
+  let filter = Arc::new(filter);
+
+  // Place the stacking context inside a non-origin tile to exercise the per-tile canvas
+  // translation when computing effect bounds.
+  let bounds = Rect::from_xywh(150.0, 150.0, 40.0, 40.0);
+  list.push(DisplayItem::PushStackingContext(StackingContextItem {
+    z_index: 0,
+    creates_stacking_context: true,
+    bounds,
+    plane_rect: bounds,
+    mix_blend_mode: BlendMode::Normal,
+    is_isolated: true,
+    transform: None,
+    child_perspective: None,
+    transform_style: TransformStyle::Flat,
+    backface_visibility: BackfaceVisibility::Visible,
+    filters: vec![ResolvedFilter::SvgFilter(filter)],
+    backdrop_filters: Vec::new(),
+    radii: BorderRadii::uniform(10.0),
+    mask: None,
+  }));
+  list.push(DisplayItem::FillRect(FillRectItem {
+    rect: Rect::from_xywh(150.0, 150.0, 40.0, 40.0),
+    color: Rgba::new(200, 60, 120, 1.0),
+  }));
+  list.push(DisplayItem::PopStackingContext);
+
+  let font_ctx = FontContext::new();
+  let serial = DisplayListRenderer::new(256, 256, Rgba::WHITE, font_ctx.clone())
+    .unwrap()
+    .with_parallelism(PaintParallelism::disabled())
+    .render(&list)
+    .expect("serial paint");
+
+  let parallelism = PaintParallelism {
+    tile_size: 64,
+    log_timing: false,
+    min_display_items: 1,
+    min_tiles: 1,
+    min_build_fragments: 1,
+    build_chunk_size: 1,
+    ..PaintParallelism::enabled()
+  };
+  let pool = ThreadPoolBuilder::new().num_threads(4).build().unwrap();
+  let report = pool.install(|| {
+    DisplayListRenderer::new(256, 256, Rgba::WHITE, font_ctx)
+      .unwrap()
+      .with_parallelism(parallelism)
+      .render_with_report(&list)
+      .expect("parallel paint")
+  });
+
+  assert!(report.parallel_used, "expected tiling to be used");
+  assert_eq!(serial.data(), report.pixmap.data());
+}
+
+#[test]
+fn mix_blend_mode_triggers_serial_fallback_without_isolation() {
+  let mut list = DisplayList::new();
+  list.push(DisplayItem::FillRect(FillRectItem {
+    rect: Rect::from_xywh(0.0, 0.0, 96.0, 96.0),
+    color: Rgba::rgb(255, 0, 0),
+  }));
+  let stacking = StackingContextItem {
+    z_index: 0,
+    creates_stacking_context: true,
+    bounds: Rect::from_xywh(0.0, 0.0, 80.0, 80.0),
+    plane_rect: Rect::from_xywh(0.0, 0.0, 80.0, 80.0),
+    mix_blend_mode: BlendMode::Multiply,
+    is_isolated: false,
+    transform: None,
+    child_perspective: None,
+    transform_style: TransformStyle::Flat,
+    backface_visibility: BackfaceVisibility::Visible,
+    filters: Vec::new(),
+    backdrop_filters: Vec::new(),
+    radii: BorderRadii::ZERO,
+    mask: None,
+  };
+  list.push(DisplayItem::PushStackingContext(stacking));
+  list.push(DisplayItem::FillRect(FillRectItem {
+    rect: Rect::from_xywh(8.0, 8.0, 40.0, 40.0),
+    color: Rgba::new(0, 0, 255, 1.0),
+  }));
+  list.push(DisplayItem::PopStackingContext);
+
+  let font_ctx = FontContext::new();
+  let serial = DisplayListRenderer::new(96, 96, Rgba::WHITE, font_ctx.clone())
+    .unwrap()
+    .with_parallelism(PaintParallelism::disabled())
+    .render(&list)
+    .expect("serial paint");
+
+  let parallelism = PaintParallelism {
+    tile_size: 24,
+    log_timing: false,
+    min_display_items: 1,
+    min_tiles: 1,
+    min_build_fragments: 1,
+    build_chunk_size: 1,
+    ..PaintParallelism::enabled()
+  };
+  let pool = ThreadPoolBuilder::new().num_threads(4).build().unwrap();
+  let report = pool.install(|| {
+    DisplayListRenderer::new(96, 96, Rgba::WHITE, font_ctx)
+      .unwrap()
+      .with_parallelism(parallelism)
+      .render_with_report(&list)
+      .expect("parallel paint")
+  });
+
+  assert!(
+    !report.parallel_used,
+    "mix-blend-mode on non-isolated context should disable parallel painting (fallback={:?})",
+    report.fallback_reason
+  );
+  assert_eq!(serial.data(), report.pixmap.data());
 }
 
 #[test]

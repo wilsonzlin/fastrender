@@ -6718,6 +6718,7 @@ impl DisplayListRenderer {
         };
 
         let parent_transform = self.canvas.transform();
+        let mask_bounds = transform_rect(bounds, &parent_transform);
         let mut local_skia_transform: Option<Transform> = None;
         let mut combined_transform = parent_transform;
         let mut applied_perspective = false;
@@ -6831,7 +6832,7 @@ impl DisplayListRenderer {
           needs_layer,
           filters: scaled_filters,
           radii,
-          mask_bounds: bounds,
+          mask_bounds,
           mask,
           css_bounds,
           manual_blend,
