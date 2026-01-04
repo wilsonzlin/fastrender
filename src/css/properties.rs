@@ -2169,36 +2169,177 @@ fn parse_gradient(value: &str) -> Option<PropertyValue> {
   }
   if is_single_function_call(trimmed, "linear-gradient") {
     let inner = extract_function_inner(trimmed, "linear-gradient".len())?;
-    return parse_linear_gradient(inner, false);
+    return parse_linear_gradient(inner, false, false);
+  }
+  if is_single_function_call(trimmed, "-webkit-linear-gradient") {
+    let inner = extract_function_inner(trimmed, "-webkit-linear-gradient".len())?;
+    return parse_linear_gradient(inner, false, true);
+  }
+  if is_single_function_call(trimmed, "-moz-linear-gradient") {
+    let inner = extract_function_inner(trimmed, "-moz-linear-gradient".len())?;
+    return parse_linear_gradient(inner, false, true);
+  }
+  if is_single_function_call(trimmed, "-o-linear-gradient") {
+    let inner = extract_function_inner(trimmed, "-o-linear-gradient".len())?;
+    return parse_linear_gradient(inner, false, true);
+  }
+  if is_single_function_call(trimmed, "-ms-linear-gradient") {
+    let inner = extract_function_inner(trimmed, "-ms-linear-gradient".len())?;
+    return parse_linear_gradient(inner, false, true);
   }
   if is_single_function_call(trimmed, "radial-gradient") {
     let inner = extract_function_inner(trimmed, "radial-gradient".len())?;
     return parse_radial_gradient(inner, false);
   }
+  if is_single_function_call(trimmed, "-webkit-radial-gradient") {
+    let inner = extract_function_inner(trimmed, "-webkit-radial-gradient".len())?;
+    return parse_radial_gradient(inner, false);
+  }
+  if is_single_function_call(trimmed, "-moz-radial-gradient") {
+    let inner = extract_function_inner(trimmed, "-moz-radial-gradient".len())?;
+    return parse_radial_gradient(inner, false);
+  }
+  if is_single_function_call(trimmed, "-o-radial-gradient") {
+    let inner = extract_function_inner(trimmed, "-o-radial-gradient".len())?;
+    return parse_radial_gradient(inner, false);
+  }
+  if is_single_function_call(trimmed, "-ms-radial-gradient") {
+    let inner = extract_function_inner(trimmed, "-ms-radial-gradient".len())?;
+    return parse_radial_gradient(inner, false);
+  }
   if is_single_function_call(trimmed, "repeating-linear-gradient") {
     let inner = extract_function_inner(trimmed, "repeating-linear-gradient".len())?;
-    return parse_linear_gradient(inner, true);
+    return parse_linear_gradient(inner, true, false);
+  }
+  if is_single_function_call(trimmed, "-webkit-repeating-linear-gradient") {
+    let inner = extract_function_inner(trimmed, "-webkit-repeating-linear-gradient".len())?;
+    return parse_linear_gradient(inner, true, true);
+  }
+  if is_single_function_call(trimmed, "-moz-repeating-linear-gradient") {
+    let inner = extract_function_inner(trimmed, "-moz-repeating-linear-gradient".len())?;
+    return parse_linear_gradient(inner, true, true);
+  }
+  if is_single_function_call(trimmed, "-o-repeating-linear-gradient") {
+    let inner = extract_function_inner(trimmed, "-o-repeating-linear-gradient".len())?;
+    return parse_linear_gradient(inner, true, true);
+  }
+  if is_single_function_call(trimmed, "-ms-repeating-linear-gradient") {
+    let inner = extract_function_inner(trimmed, "-ms-repeating-linear-gradient".len())?;
+    return parse_linear_gradient(inner, true, true);
   }
   if is_single_function_call(trimmed, "repeating-radial-gradient") {
     let inner = extract_function_inner(trimmed, "repeating-radial-gradient".len())?;
+    return parse_radial_gradient(inner, true);
+  }
+  if is_single_function_call(trimmed, "-webkit-repeating-radial-gradient") {
+    let inner = extract_function_inner(trimmed, "-webkit-repeating-radial-gradient".len())?;
+    return parse_radial_gradient(inner, true);
+  }
+  if is_single_function_call(trimmed, "-moz-repeating-radial-gradient") {
+    let inner = extract_function_inner(trimmed, "-moz-repeating-radial-gradient".len())?;
+    return parse_radial_gradient(inner, true);
+  }
+  if is_single_function_call(trimmed, "-o-repeating-radial-gradient") {
+    let inner = extract_function_inner(trimmed, "-o-repeating-radial-gradient".len())?;
+    return parse_radial_gradient(inner, true);
+  }
+  if is_single_function_call(trimmed, "-ms-repeating-radial-gradient") {
+    let inner = extract_function_inner(trimmed, "-ms-repeating-radial-gradient".len())?;
     return parse_radial_gradient(inner, true);
   }
   if is_single_function_call(trimmed, "conic-gradient") {
     let inner = extract_function_inner(trimmed, "conic-gradient".len())?;
     return parse_conic_gradient(inner, false);
   }
+  if is_single_function_call(trimmed, "-webkit-conic-gradient") {
+    let inner = extract_function_inner(trimmed, "-webkit-conic-gradient".len())?;
+    return parse_conic_gradient(inner, false);
+  }
+  if is_single_function_call(trimmed, "-moz-conic-gradient") {
+    let inner = extract_function_inner(trimmed, "-moz-conic-gradient".len())?;
+    return parse_conic_gradient(inner, false);
+  }
+  if is_single_function_call(trimmed, "-o-conic-gradient") {
+    let inner = extract_function_inner(trimmed, "-o-conic-gradient".len())?;
+    return parse_conic_gradient(inner, false);
+  }
+  if is_single_function_call(trimmed, "-ms-conic-gradient") {
+    let inner = extract_function_inner(trimmed, "-ms-conic-gradient".len())?;
+    return parse_conic_gradient(inner, false);
+  }
   if is_single_function_call(trimmed, "repeating-conic-gradient") {
     let inner = extract_function_inner(trimmed, "repeating-conic-gradient".len())?;
+    return parse_conic_gradient(inner, true);
+  }
+  if is_single_function_call(trimmed, "-webkit-repeating-conic-gradient") {
+    let inner = extract_function_inner(trimmed, "-webkit-repeating-conic-gradient".len())?;
+    return parse_conic_gradient(inner, true);
+  }
+  if is_single_function_call(trimmed, "-moz-repeating-conic-gradient") {
+    let inner = extract_function_inner(trimmed, "-moz-repeating-conic-gradient".len())?;
+    return parse_conic_gradient(inner, true);
+  }
+  if is_single_function_call(trimmed, "-o-repeating-conic-gradient") {
+    let inner = extract_function_inner(trimmed, "-o-repeating-conic-gradient".len())?;
+    return parse_conic_gradient(inner, true);
+  }
+  if is_single_function_call(trimmed, "-ms-repeating-conic-gradient") {
+    let inner = extract_function_inner(trimmed, "-ms-repeating-conic-gradient".len())?;
     return parse_conic_gradient(inner, true);
   }
   None
 }
 
-fn parse_linear_gradient(inner: &str, repeating: bool) -> Option<PropertyValue> {
+fn parse_linear_gradient(
+  inner: &str,
+  repeating: bool,
+  allow_legacy_direction: bool,
+) -> Option<PropertyValue> {
+  fn parse_legacy_direction(token: &str) -> Option<f32> {
+    let token = token.trim();
+    if token.is_empty() {
+      return None;
+    }
+    let mut dx = 0i32;
+    let mut dy = 0i32;
+    for part in token.split_whitespace() {
+      if part.eq_ignore_ascii_case("left") {
+        dx += 1;
+      } else if part.eq_ignore_ascii_case("right") {
+        dx -= 1;
+      } else if part.eq_ignore_ascii_case("top") {
+        dy += 1;
+      } else if part.eq_ignore_ascii_case("bottom") {
+        dy -= 1;
+      } else {
+        return None;
+      }
+    }
+    if dx == 0 && dy == 0 {
+      return None;
+    }
+    let angle = match (dx.signum(), dy.signum()) {
+      (1, 0) => 90.0,
+      (-1, 0) => 270.0,
+      (0, 1) => 180.0,
+      (0, -1) => 0.0,
+      (1, -1) => 45.0,
+      (1, 1) => 135.0,
+      (-1, 1) => 225.0,
+      (-1, -1) => 315.0,
+      _ => 180.0,
+    };
+    Some(angle)
+  }
+
   let mut iter = split_top_level_commas(inner);
   let first = iter.next()?;
   let second = iter.next()?;
-  let (angle, first_stop) = match parse_gradient_angle(first) {
+  let mut parsed_angle = parse_gradient_angle(first);
+  if parsed_angle.is_none() && allow_legacy_direction {
+    parsed_angle = parse_legacy_direction(first);
+  }
+  let (angle, first_stop) = match parsed_angle {
     Some(angle) => (angle, None),
     None => (180.0, Some(first)),
   };
@@ -3320,6 +3461,72 @@ mod tests {
     };
     assert!((angle - 270.0).abs() < 0.01);
     assert_eq!(stops.len(), 2);
+  }
+
+  #[test]
+  fn parses_vendor_prefixed_linear_gradient_functions() {
+    let prefixed = "-webkit-linear-gradient(to left, #000, #fff)";
+    let unprefixed = "linear-gradient(to left, #000, #fff)";
+
+    let PropertyValue::LinearGradient {
+      angle: prefixed_angle,
+      stops: prefixed_stops,
+    } = parse_property_value("background-image", prefixed).expect("gradient")
+    else {
+      panic!("expected linear gradient");
+    };
+    let PropertyValue::LinearGradient {
+      angle: unprefixed_angle,
+      stops: unprefixed_stops,
+    } = parse_property_value("background-image", unprefixed).expect("gradient")
+    else {
+      panic!("expected linear gradient");
+    };
+
+    assert!((prefixed_angle - unprefixed_angle).abs() < 1e-6);
+    assert_eq!(prefixed_stops, unprefixed_stops);
+  }
+
+  #[test]
+  fn parses_vendor_prefixed_linear_gradient_legacy_direction_keywords() {
+    let value = "-webkit-linear-gradient(right, #000, #fff)";
+    let PropertyValue::LinearGradient { angle, stops } =
+      parse_property_value("background-image", value).expect("gradient")
+    else {
+      panic!("expected linear gradient");
+    };
+    assert!((angle - 270.0).abs() < 0.01);
+    assert_eq!(stops.len(), 2);
+  }
+
+  #[test]
+  fn parses_vendor_prefixed_radial_gradient_functions() {
+    let prefixed = "-webkit-radial-gradient(red, blue 75%)";
+    let unprefixed = "radial-gradient(red, blue 75%)";
+
+    let PropertyValue::RadialGradient {
+      shape: prefixed_shape,
+      size: prefixed_size,
+      position: prefixed_position,
+      stops: prefixed_stops,
+    } = parse_property_value("mask-image", prefixed).expect("gradient")
+    else {
+      panic!("expected radial gradient");
+    };
+    let PropertyValue::RadialGradient {
+      shape: unprefixed_shape,
+      size: unprefixed_size,
+      position: unprefixed_position,
+      stops: unprefixed_stops,
+    } = parse_property_value("mask-image", unprefixed).expect("gradient")
+    else {
+      panic!("expected radial gradient");
+    };
+
+    assert_eq!(prefixed_shape, unprefixed_shape);
+    assert_eq!(prefixed_size, unprefixed_size);
+    assert_eq!(prefixed_position, unprefixed_position);
+    assert_eq!(prefixed_stops, unprefixed_stops);
   }
 
   #[test]
