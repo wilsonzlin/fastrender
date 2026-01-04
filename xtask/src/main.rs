@@ -1483,12 +1483,18 @@ fn repo_root() -> PathBuf {
     .to_path_buf()
 }
 
-fn cargo_target_dir(repo_root: &Path) -> PathBuf {
-  match std::env::var_os("CARGO_TARGET_DIR").map(PathBuf::from) {
-    Some(path) if path.is_absolute() => path,
+fn resolve_cargo_target_dir(repo_root: &Path, cargo_target_dir: Option<&Path>) -> PathBuf {
+  match cargo_target_dir {
+    Some(path) if path.as_os_str().is_empty() => repo_root.join("target"),
+    Some(path) if path.is_absolute() => path.to_path_buf(),
     Some(path) => repo_root.join(path),
     None => repo_root.join("target"),
   }
+}
+
+fn cargo_target_dir(repo_root: &Path) -> PathBuf {
+  let cargo_target_dir = std::env::var_os("CARGO_TARGET_DIR").map(PathBuf::from);
+  resolve_cargo_target_dir(repo_root, cargo_target_dir.as_deref())
 }
 
 fn diff_renders_executable(repo_root: &Path) -> PathBuf {
@@ -1734,4 +1740,37 @@ fn parse_viewport(raw: &str) -> Result<(u32, u32)> {
   }
 
   Ok((width, height))
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn resolve_cargo_target_dir_uses_repo_target_by_default() {
+    let repo_root = PathBuf::from("/repo");
+    assert_eq!(resolve_cargo_target_dir(&repo_root, None), repo_root.join("target"));
+    assert_eq!(
+      resolve_cargo_target_dir(&repo_root, Some(Path::new(""))),
+      repo_root.join("target")
+    );
+  }
+
+  #[test]
+  fn resolve_cargo_target_dir_resolves_relative_paths_from_repo_root() {
+    let repo_root = PathBuf::from("/repo");
+    assert_eq!(
+      resolve_cargo_target_dir(&repo_root, Some(Path::new("custom_target"))),
+      repo_root.join("custom_target")
+    );
+  }
+
+  #[test]
+  fn resolve_cargo_target_dir_preserves_absolute_paths() {
+    let repo_root = PathBuf::from("/repo");
+    assert_eq!(
+      resolve_cargo_target_dir(&repo_root, Some(Path::new("/abs/target"))),
+      PathBuf::from("/abs/target")
+    );
+  }
 }
