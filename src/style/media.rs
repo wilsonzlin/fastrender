@@ -1987,6 +1987,10 @@ impl MediaContext {
 
   /// Applies user/environment overrides for media preferences.
   ///
+  /// Values are sourced from the active [`crate::debug::runtime::RuntimeToggles`] (which defaults
+  /// to the process environment). Embedders can install per-render overrides without mutating
+  /// environment variables.
+  ///
   /// Recognized environment variables:
   /// - `FASTR_MEDIA_TYPE` = `screen` | `print` | `all` | `speech`
   /// - `FASTR_PREFERS_COLOR_SCHEME` = `light` | `dark` | `no-preference`
@@ -2006,7 +2010,7 @@ impl MediaContext {
   /// - `FASTR_MONOCHROME_DEPTH` = integer bits for monochrome devices (e.g., 1)
   #[allow(clippy::cognitive_complexity)]
   pub fn with_env_overrides(mut self) -> Self {
-    let toggles = crate::debug::runtime::RuntimeToggles::from_env();
+    let toggles = crate::debug::runtime::runtime_toggles();
     let overrides = &toggles.config().media;
     if let Some(mt) = overrides.media_type {
       self.media_type = mt;

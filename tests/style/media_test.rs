@@ -4,6 +4,8 @@
 //! real-world use cases and CSS specification requirements.
 
 use fastrender::css::parser::parse_stylesheet;
+use fastrender::debug::runtime::with_thread_runtime_toggles;
+use fastrender::debug::runtime::RuntimeToggles;
 use fastrender::style::media::ColorScheme;
 use fastrender::style::media::ContrastPreference;
 use fastrender::style::media::DisplayMode;
@@ -15,23 +17,15 @@ use fastrender::style::media::MediaType;
 use fastrender::style::media::PointerCapability;
 use fastrender::style::media::Scripting;
 use fastrender::style::media::UpdateFrequency;
-use std::env;
+use std::collections::HashMap;
+use std::sync::Arc;
 
-struct EnvGuard {
-  key: &'static str,
-  prev: Option<String>,
-}
-
-impl EnvGuard {
-  fn new(key: &'static str, value: Option<&str>) -> Self {
-    let prev = env::var(key).ok();
-    if let Some(v) = value {
-      env::set_var(key, v);
-    } else {
-      env::remove_var(key);
-    }
-    EnvGuard { key, prev }
-  }
+fn with_test_toggles<T>(pairs: &[(&str, &str)], f: impl FnOnce() -> T) -> T {
+  let raw = pairs
+    .iter()
+    .map(|(key, value)| ((*key).to_string(), (*value).to_string()))
+    .collect::<HashMap<_, _>>();
+  with_thread_runtime_toggles(Arc::new(RuntimeToggles::from_map(raw)), f)
 }
 
 #[test]
@@ -52,16 +46,6 @@ fn rejects_media_query_with_invalid_length_unit() {
 fn rejects_media_query_calc_percentage_without_base() {
   // Percentages inside calc() should fail when no percentage base is available.
   assert!(MediaQuery::parse("(max-width: calc(50% + 10px))").is_err());
-}
-
-impl Drop for EnvGuard {
-  fn drop(&mut self) {
-    if let Some(v) = &self.prev {
-      env::set_var(self.key, v);
-    } else {
-      env::remove_var(self.key);
-    }
-  }
 }
 
 // ============================================================================
@@ -593,83 +577,84 @@ fn test_prefers_contrast() {
 /// Tests env override for prefers-contrast
 #[test]
 fn env_override_prefers_contrast() {
-  let guard = EnvGuard::new("FASTR_PREFERS_CONTRAST", Some("high"));
-  let ctx = MediaContext::screen(800.0, 600.0).with_env_overrides();
-  assert!(matches!(ctx.prefers_contrast, ContrastPreference::More));
-  drop(guard);
+  with_test_toggles(&[("FASTR_PREFERS_CONTRAST", "high")], || {
+    let ctx = MediaContext::screen(800.0, 600.0).with_env_overrides();
+    assert!(matches!(ctx.prefers_contrast, ContrastPreference::More));
+  });
 
-  let guard_low = EnvGuard::new("FASTR_PREFERS_CONTRAST", Some("low"));
-  let ctx = MediaContext::screen(800.0, 600.0).with_env_overrides();
-  assert!(matches!(ctx.prefers_contrast, ContrastPreference::Less));
-  drop(guard_low);
+  with_test_toggles(&[("FASTR_PREFERS_CONTRAST", "low")], || {
+    let ctx = MediaContext::screen(800.0, 600.0).with_env_overrides();
+    assert!(matches!(ctx.prefers_contrast, ContrastPreference::Less));
+  });
 
-  let guard_custom = EnvGuard::new("FASTR_PREFERS_CONTRAST", Some("forced"));
-  let ctx = MediaContext::screen(800.0, 600.0).with_env_overrides();
-  assert!(matches!(ctx.prefers_contrast, ContrastPreference::Custom));
-  drop(guard_custom);
+  with_test_toggles(&[("FASTR_PREFERS_CONTRAST", "forced")], || {
+    let ctx = MediaContext::screen(800.0, 600.0).with_env_overrides();
+    assert!(matches!(ctx.prefers_contrast, ContrastPreference::Custom));
+  });
 
-  let guard_invalid = EnvGuard::new("FASTR_PREFERS_CONTRAST", Some("unknown"));
-  let ctx = MediaContext::screen(800.0, 600.0)
-    .with_prefers_contrast(ContrastPreference::More)
-    .with_env_overrides();
-  assert!(matches!(ctx.prefers_contrast, ContrastPreference::More));
-  drop(guard_invalid);
+  with_test_toggles(&[("FASTR_PREFERS_CONTRAST", "unknown")], || {
+    let ctx = MediaContext::screen(800.0, 600.0)
+      .with_prefers_contrast(ContrastPreference::More)
+      .with_env_overrides();
+    assert!(matches!(ctx.prefers_contrast, ContrastPreference::More));
+  });
 }
 
 /// Tests env override for prefers-reduced-transparency
 #[test]
 fn env_override_prefers_reduced_transparency() {
-  let guard = EnvGuard::new("FASTR_PREFERS_REDUCED_TRANSPARENCY", Some("reduce"));
-  let ctx = MediaContext::screen(800.0, 600.0).with_env_overrides();
-  assert!(ctx.prefers_reduced_transparency);
-  drop(guard);
+  with_test_toggles(&[("FASTR_PREFERS_REDUCED_TRANSPARENCY", "reduce")], || {
+    let ctx = MediaContext::screen(800.0, 600.0).with_env_overrides();
+    assert!(ctx.prefers_reduced_transparency);
+  });
 
-  let guard_no_pref = EnvGuard::new("FASTR_PREFERS_REDUCED_TRANSPARENCY", Some("no-preference"));
-  let ctx = MediaContext::screen(800.0, 600.0).with_env_overrides();
-  assert!(!ctx.prefers_reduced_transparency);
-  drop(guard_no_pref);
+  with_test_toggles(&[("FASTR_PREFERS_REDUCED_TRANSPARENCY", "no-preference")], || {
+    let ctx = MediaContext::screen(800.0, 600.0).with_env_overrides();
+    assert!(!ctx.prefers_reduced_transparency);
+  });
 
-  let guard_invalid = EnvGuard::new("FASTR_PREFERS_REDUCED_TRANSPARENCY", Some("invalid"));
-  let ctx = MediaContext::screen(800.0, 600.0).with_env_overrides();
-  assert!(!ctx.prefers_reduced_transparency);
-  drop(guard_invalid);
+  with_test_toggles(&[("FASTR_PREFERS_REDUCED_TRANSPARENCY", "invalid")], || {
+    let ctx = MediaContext::screen(800.0, 600.0).with_env_overrides();
+    assert!(!ctx.prefers_reduced_transparency);
+  });
 }
 
 #[test]
 fn env_override_level5_features() {
-  let guard_script = EnvGuard::new("FASTR_SCRIPTING", Some("none"));
-  let guard_light = EnvGuard::new("FASTR_LIGHT_LEVEL", Some("dim"));
-  let guard_update = EnvGuard::new("FASTR_UPDATE_FREQUENCY", Some("slow"));
-  let guard_display = EnvGuard::new("FASTR_DISPLAY_MODE", Some("standalone"));
-  let guard_media = EnvGuard::new("FASTR_MEDIA_TYPE", Some("print"));
-
-  let ctx = MediaContext::screen(800.0, 600.0).with_env_overrides();
-  assert!(matches!(ctx.scripting, Scripting::None));
-  assert!(matches!(ctx.light_level, LightLevel::Dim));
-  assert!(matches!(ctx.update_frequency, UpdateFrequency::Slow));
-  assert!(matches!(ctx.display_mode, DisplayMode::Standalone));
-  assert!(matches!(ctx.media_type, MediaType::Print));
-
-  drop(guard_script);
-  drop(guard_light);
-  drop(guard_update);
-  drop(guard_display);
-  drop(guard_media);
+  with_test_toggles(
+    &[
+      ("FASTR_SCRIPTING", "none"),
+      ("FASTR_LIGHT_LEVEL", "dim"),
+      ("FASTR_UPDATE_FREQUENCY", "slow"),
+      ("FASTR_DISPLAY_MODE", "standalone"),
+      ("FASTR_MEDIA_TYPE", "print"),
+    ],
+    || {
+      let ctx = MediaContext::screen(800.0, 600.0).with_env_overrides();
+      assert!(matches!(ctx.scripting, Scripting::None));
+      assert!(matches!(ctx.light_level, LightLevel::Dim));
+      assert!(matches!(ctx.update_frequency, UpdateFrequency::Slow));
+      assert!(matches!(ctx.display_mode, DisplayMode::Standalone));
+      assert!(matches!(ctx.media_type, MediaType::Print));
+    },
+  );
 }
 
 #[test]
 fn media_query_with_reduced_transparency_env_overrides_cache() {
-  let guard = EnvGuard::new("FASTR_PREFERS_REDUCED_TRANSPARENCY", Some("reduce"));
   let query = MediaQuery::parse("(prefers-reduced-transparency: reduce)").unwrap();
   let mut cache = MediaQueryCache::default();
 
-  let ctx = MediaContext::screen(800.0, 600.0).with_env_overrides();
-  assert!(ctx.evaluate_with_cache(&query, Some(&mut cache)));
-  drop(guard);
+  with_test_toggles(&[("FASTR_PREFERS_REDUCED_TRANSPARENCY", "reduce")], || {
+    let ctx = MediaContext::screen(800.0, 600.0).with_env_overrides();
+    assert!(ctx.evaluate_with_cache(&query, Some(&mut cache)));
+  });
 
   // Without the env override the same cached key should not incorrectly match; rebuild context.
-  let ctx_no_override = MediaContext::screen(800.0, 600.0).with_env_overrides();
-  assert!(!ctx_no_override.evaluate_with_cache(&query, Some(&mut cache)));
+  with_test_toggles(&[], || {
+    let ctx_no_override = MediaContext::screen(800.0, 600.0).with_env_overrides();
+    assert!(!ctx_no_override.evaluate_with_cache(&query, Some(&mut cache)));
+  });
 }
 
 #[test]
@@ -744,15 +729,15 @@ fn media_query_cache_reuses_existing_entry() {
 /// Tests env override for prefers-reduced-data
 #[test]
 fn env_override_prefers_reduced_data() {
-  let guard = EnvGuard::new("FASTR_PREFERS_REDUCED_DATA", Some("reduce"));
-  let ctx = MediaContext::screen(800.0, 600.0).with_env_overrides();
-  assert!(ctx.prefers_reduced_data);
-  drop(guard);
+  with_test_toggles(&[("FASTR_PREFERS_REDUCED_DATA", "reduce")], || {
+    let ctx = MediaContext::screen(800.0, 600.0).with_env_overrides();
+    assert!(ctx.prefers_reduced_data);
+  });
 
-  let guard_invalid = EnvGuard::new("FASTR_PREFERS_REDUCED_DATA", Some("invalid"));
-  let ctx = MediaContext::screen(800.0, 600.0).with_env_overrides();
-  assert!(!ctx.prefers_reduced_data);
-  drop(guard_invalid);
+  with_test_toggles(&[("FASTR_PREFERS_REDUCED_DATA", "invalid")], || {
+    let ctx = MediaContext::screen(800.0, 600.0).with_env_overrides();
+    assert!(!ctx.prefers_reduced_data);
+  });
 }
 
 /// Tests prefers-reduced-data media feature evaluation
