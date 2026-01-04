@@ -17,6 +17,10 @@ pub struct DiffMetrics {
   pub diff_percentage: f64,
   /// SSIM-derived perceptual distance (0.0 = identical, higher = more different).
   pub perceptual_distance: f64,
+  /// Dimensions of the rendered/actual image.
+  pub rendered_dimensions: (u32, u32),
+  /// Dimensions of the expected/baseline image.
+  pub expected_dimensions: (u32, u32),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -138,6 +142,8 @@ pub fn diff_png(rendered: &[u8], expected: &[u8], tolerance: u8) -> Result<(Diff
       total_pixels: diff.statistics.total_pixels,
       diff_percentage: diff.statistics.different_percent,
       perceptual_distance: diff.statistics.perceptual_distance,
+      rendered_dimensions: diff.actual_dimensions,
+      expected_dimensions: diff.expected_dimensions,
     };
 
     return Ok((metrics, diff_png));
@@ -209,6 +215,8 @@ pub fn diff_png(rendered: &[u8], expected: &[u8], tolerance: u8) -> Result<(Diff
     // Perceptual distance is ill-defined when dimensions don't match; treat this as maximally
     // different for now.
     perceptual_distance: 1.0,
+    rendered_dimensions: (rendered_img.width(), rendered_img.height()),
+    expected_dimensions: (expected_img.width(), expected_img.height()),
   };
 
   Ok((metrics, diff_png))

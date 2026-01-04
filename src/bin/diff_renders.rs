@@ -234,40 +234,42 @@ fn run() -> Result<i32, String> {
 
   let (before_root, after_root, mut results, totals) =
     match (before_meta.is_dir(), after_meta.is_dir()) {
-    (true, true) => {
-      let before_dir = normalize_dir(&args.before)?;
-      let after_dir = normalize_dir(&args.after)?;
-      let (results, totals) = process_directory(
-        &before_dir,
-        &after_dir,
-        &html_dir,
-        &diff_dir,
-        tolerance,
-        max_diff_percent,
-        max_perceptual_distance,
-        args.shard,
-      )?;
-      (before_dir, after_dir, results, totals)
-    }
-    (false, false) => {
-      let before_file = normalize_png_file(&args.before)?;
-      let after_file = normalize_png_file(&args.after)?;
-      let (results, totals) = process_files(
-        &before_file,
-        &after_file,
-        &html_dir,
-        &diff_dir,
-        tolerance,
-        max_diff_percent,
-        max_perceptual_distance,
-        args.shard,
-      )?;
-      (before_file, after_file, results, totals)
-    }
-    _ => {
-      return Err("--before and --after must both be directories or both be PNG files".to_string());
-    }
-  };
+      (true, true) => {
+        let before_dir = normalize_dir(&args.before)?;
+        let after_dir = normalize_dir(&args.after)?;
+        let (results, totals) = process_directory(
+          &before_dir,
+          &after_dir,
+          &html_dir,
+          &diff_dir,
+          tolerance,
+          max_diff_percent,
+          max_perceptual_distance,
+          args.shard,
+        )?;
+        (before_dir, after_dir, results, totals)
+      }
+      (false, false) => {
+        let before_file = normalize_png_file(&args.before)?;
+        let after_file = normalize_png_file(&args.after)?;
+        let (results, totals) = process_files(
+          &before_file,
+          &after_file,
+          &html_dir,
+          &diff_dir,
+          tolerance,
+          max_diff_percent,
+          max_perceptual_distance,
+          args.shard,
+        )?;
+        (before_file, after_file, results, totals)
+      }
+      _ => {
+        return Err(
+          "--before and --after must both be directories or both be PNG files".to_string(),
+        );
+      }
+    };
 
   sort_entries(&mut results, args.sort_by);
 
@@ -578,7 +580,17 @@ fn process_entry(
 
               let mut diff_path = None;
               let mut final_status = status;
-              let mut error = None;
+              let mut error = if metrics.rendered_dimensions != metrics.expected_dimensions {
+                Some(format!(
+                  "Dimensions differ: after {}x{}, before {}x{}",
+                  metrics.rendered_dimensions.0,
+                  metrics.rendered_dimensions.1,
+                  metrics.expected_dimensions.0,
+                  metrics.expected_dimensions.1
+                ))
+              } else {
+                None
+              };
               if metrics.pixel_diff > 0 {
                 let path = diff_path_for_name(diff_dir, name);
                 if let Err(e) = ensure_parent_dir(&path) {
