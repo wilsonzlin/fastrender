@@ -3221,7 +3221,7 @@ impl Painter {
     }
     if let Some(prev_dirty) = css_mask_scratch.scratch.last_dirty {
       if let Some(mask) = css_mask_scratch.scratch.mask.as_mut() {
-        clear_mask_rect(mask, prev_dirty);
+        clear_mask_rect(mask, prev_dirty)?;
       }
       css_mask_scratch.scratch.last_dirty = None;
     }
@@ -3431,7 +3431,7 @@ impl Painter {
 
               if matches!(op, MaskComposite::Intersect | MaskComposite::Subtract) {
                 if let Some(bounds) = prev_bounds {
-                  hard_clip_mask_outside_rect_within_bounds(dest, dirty, bounds);
+                  hard_clip_mask_outside_rect_within_bounds(dest, dirty, bounds)?;
                 }
               }
 
@@ -10864,7 +10864,9 @@ impl BackgroundClipMaskGuard {
 
     if needs_rebuild {
       if let Some(dirty) = clip_mask_dirty_bounds(rect, canvas_w, canvas_h) {
-        clear_mask_rect(mask, dirty);
+        if clear_mask_rect(mask, dirty).is_err() {
+          return None;
+        }
       } else {
         mask.data_mut().fill(0);
       }
@@ -10902,9 +10904,9 @@ impl Drop for BackgroundClipMaskGuard {
   }
 }
 
-fn clear_mask_rect(mask: &mut Mask, rect: ClipMaskDirtyRect) {
+fn clear_mask_rect(mask: &mut Mask, rect: ClipMaskDirtyRect) -> RenderResult<()> {
   if rect.x0 >= rect.x1 || rect.y0 >= rect.y1 {
-    return;
+    return Ok(());
   }
   let width = mask.width() as usize;
   let stride = width;
@@ -10913,14 +10915,22 @@ fn clear_mask_rect(mask: &mut Mask, rect: ClipMaskDirtyRect) {
   let x1 = rect.x1 as usize;
   let y0 = rect.y0 as usize;
   let y1 = rect.y1 as usize;
+  let mut deadline_counter = 0usize;
   if x0 == 0 && x1 == stride {
-    data[y0 * stride..y1 * stride].fill(0);
-    return;
+    for chunk in data[y0 * stride..y1 * stride].chunks_mut(CLIP_MASK_DEADLINE_STRIDE) {
+      check_active_periodic(&mut deadline_counter, 1, RenderStage::Paint)?;
+      chunk.fill(0);
+    }
+    return Ok(());
   }
   for row in y0..y1 {
     let offset = row * stride;
-    data[offset + x0..offset + x1].fill(0);
+    for chunk in data[offset + x0..offset + x1].chunks_mut(CLIP_MASK_DEADLINE_STRIDE) {
+      check_active_periodic(&mut deadline_counter, 1, RenderStage::Paint)?;
+      chunk.fill(0);
+    }
   }
+  Ok(())
 }
 
 #[inline]
@@ -10950,9 +10960,9 @@ fn hard_clip_mask_outside_rect_within_bounds(
   mask: &mut Mask,
   keep: ClipMaskDirtyRect,
   bounds: ClipMaskDirtyRect,
-) {
+) -> RenderResult<()> {
   if bounds.x0 >= bounds.x1 || bounds.y0 >= bounds.y1 {
-    return;
+    return Ok(());
   }
 
   let keep_x0 = keep.x0.max(bounds.x0);
@@ -10960,8 +10970,8 @@ fn hard_clip_mask_outside_rect_within_bounds(
   let keep_x1 = keep.x1.min(bounds.x1);
   let keep_y1 = keep.y1.min(bounds.y1);
   if keep_x0 >= keep_x1 || keep_y0 >= keep_y1 {
-    clear_mask_rect(mask, bounds);
-    return;
+    clear_mask_rect(mask, bounds)?;
+    return Ok(());
   }
 
   if bounds.y0 < keep_y0 {
@@ -10973,7 +10983,7 @@ fn hard_clip_mask_outside_rect_within_bounds(
         x1: bounds.x1,
         y1: keep_y0,
       },
-    );
+    )?;
   }
   if keep_y1 < bounds.y1 {
     clear_mask_rect(
@@ -10984,7 +10994,7 @@ fn hard_clip_mask_outside_rect_within_bounds(
         x1: bounds.x1,
         y1: bounds.y1,
       },
-    );
+    )?;
   }
   if bounds.x0 < keep_x0 {
     clear_mask_rect(
@@ -10995,7 +11005,7 @@ fn hard_clip_mask_outside_rect_within_bounds(
         x1: keep_x0,
         y1: keep_y1,
       },
-    );
+    )?;
   }
   if keep_x1 < bounds.x1 {
     clear_mask_rect(
@@ -11006,8 +11016,9 @@ fn hard_clip_mask_outside_rect_within_bounds(
         x1: bounds.x1,
         y1: keep_y1,
       },
-    );
+    )?;
   }
+  Ok(())
 }
 
 #[inline]
@@ -11450,7 +11461,7 @@ fn apply_clip_mask_rect(pixmap: &mut Pixmap, rect: Rect, radii: BorderRadii) -> 
 
       if needs_rebuild {
         if let Some(dirty) = dirty {
-          clear_mask_rect(mask, dirty);
+          clear_mask_rect(mask, dirty)?;
         } else {
           // If the dirty bounds are empty (e.g. due to weird floating point inputs), clear the
           // entire mask so we don't reuse stale data.
