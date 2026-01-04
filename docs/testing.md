@@ -67,7 +67,9 @@ cargo run --release --bin render_fixtures -- --out-dir target/fixture_chrome_dif
 # 2) Produce local Chrome baseline PNGs for those fixture(s):
 cargo xtask chrome-baseline-fixtures --out-dir target/fixture_chrome_diff/chrome
 
-# 3) Generate a combined Chrome-vs-FastRender HTML report under target/ (re-runs steps 1-2 by default; pass `--no-chrome` to reuse `target/fixture_chrome_diff/chrome`):
+# 3) Generate a combined Chrome-vs-FastRender HTML report under target/.
+# (Re-runs steps 1-2 by default; pass `--no-chrome` to reuse `target/fixture_chrome_diff/chrome`;
+# pass `--no-build` to reuse an existing `target/release/diff_renders` binary.)
 cargo xtask fixture-chrome-diff
 ```
 
@@ -77,6 +79,7 @@ Artifacts and PR guidance:
 
 - Report: `target/fixture_chrome_diff/report.html` (plus `report.json` and per-fixture PNG/log/metadata artifacts under `target/fixture_chrome_diff/{chrome,fastrender,...}`).
 - Re-run without invoking Chrome (reuse existing renders under `target/fixture_chrome_diff/chrome`): `cargo xtask fixture-chrome-diff --no-chrome`.
+- Exit non-zero when diffs are found (useful for gating local scripts): `cargo xtask fixture-chrome-diff --fail-on-differences`.
 - **Do not commit** Chrome baseline PNGs or diff reports; they are local artifacts. Attach the generated report directory (or at least `report.html` + the referenced PNGs) to your PR description instead.
 - **Do commit** new/updated fixtures under `tests/pages/fixtures/<fixture>/` when they are part of the regression story.
 
