@@ -458,24 +458,6 @@ impl Canvas {
     let new_pixmap = new_pixmap_with_context(width, height, "layer")?;
 
     let parent_transform = self.current_state.transform;
-    // Parallel tiling translates the canvas per tile; store layer origins in pre-translation space.
-    let origin = {
-      let is_translate_only = (parent_transform.sx - 1.0).abs() < 1e-6
-        && (parent_transform.sy - 1.0).abs() < 1e-6
-        && parent_transform.kx.abs() < 1e-6
-        && parent_transform.ky.abs() < 1e-6;
-      if is_translate_only {
-        let tx = parent_transform.tx.round();
-        let ty = parent_transform.ty.round();
-        if (parent_transform.tx - tx).abs() < 1e-6 && (parent_transform.ty - ty).abs() < 1e-6 {
-          (origin_x.saturating_sub(tx as i32), origin_y.saturating_sub(ty as i32))
-        } else {
-          (origin_x, origin_y)
-        }
-      } else {
-        (origin_x, origin_y)
-      }
-    };
 
     let record = LayerRecord {
       pixmap: std::mem::replace(&mut self.pixmap, new_pixmap),
@@ -487,7 +469,7 @@ impl Canvas {
       parent_clip_mask: self.current_state.clip_mask.clone(),
       opacity: opacity.clamp(0.0, 1.0),
       composite_blend: blend,
-      origin,
+      origin: (origin_x, origin_y),
     };
     self.layer_stack.push(record);
     // Painting inside the layer should start from a neutral state.
@@ -2244,8 +2226,9 @@ mod tests {
     canvas.pop_layer().unwrap();
 
     let pixmap = canvas.into_pixmap();
-    assert_eq!(pixel(&pixmap, 3, 3), (255, 0, 0, 255));
+    assert_eq!(pixel(&pixmap, 1, 1), (255, 0, 0, 255));
     assert_eq!(pixel(&pixmap, 0, 0), (255, 255, 255, 255));
+    assert_eq!(pixel(&pixmap, 6, 5), (255, 255, 255, 255));
   }
 
   #[test]
@@ -2268,7 +2251,8 @@ mod tests {
     bounded.pop_layer().unwrap();
     let bounded_pixmap = bounded.into_pixmap();
 
-    assert_eq!(pixel(&bounded_pixmap, 3, 3), (255, 0, 0, 255));
+    assert_eq!(pixel(&bounded_pixmap, 1, 1), (255, 0, 0, 255));
+    assert_eq!(pixel(&bounded_pixmap, 6, 5), (255, 255, 255, 255));
     assert_eq!(
       bounded_pixmap.data(),
       full_pixmap.data(),
