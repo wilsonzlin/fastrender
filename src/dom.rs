@@ -2422,10 +2422,12 @@ fn parse_shadow_root_definition(template: &DomNode) -> Option<(ShadowRootMode, b
   let mode_attr = template
     .get_attribute_ref("shadowroot")
     .or_else(|| template.get_attribute_ref("shadowrootmode"))?;
-  let mode = match mode_attr.to_ascii_lowercase().as_str() {
-    "open" => ShadowRootMode::Open,
-    "closed" => ShadowRootMode::Closed,
-    _ => return None,
+  let mode = if mode_attr.eq_ignore_ascii_case("open") {
+    ShadowRootMode::Open
+  } else if mode_attr.eq_ignore_ascii_case("closed") {
+    ShadowRootMode::Closed
+  } else {
+    return None;
   };
 
   let delegates_focus = template
@@ -2435,14 +2437,19 @@ fn parse_shadow_root_definition(template: &DomNode) -> Option<(ShadowRootMode, b
   Some((mode, delegates_focus))
 }
 
-fn is_inert_html_template(node: &DomNode) -> bool {
-  matches!(
+pub(crate) fn is_inert_html_template(node: &DomNode) -> bool {
+  if !matches!(
     node.tag_name(),
     Some(tag) if tag.eq_ignore_ascii_case("template")
-  ) && matches!(
-    node.namespace(),
-    Some(ns) if ns.is_empty() || ns == HTML_NAMESPACE
-  ) && parse_shadow_root_definition(node).is_none()
+  ) {
+    return false;
+  }
+
+  if !matches!(node.namespace(), Some(ns) if ns.is_empty() || ns == HTML_NAMESPACE) {
+    return true;
+  }
+
+  parse_shadow_root_definition(node).is_none()
 }
 
 fn attach_shadow_roots(node: &mut DomNode, deadline_counter: &mut usize) -> Result<()> {
@@ -2526,6 +2533,10 @@ fn collect_slot_names<'a>(node: &'a DomNode, out: &mut HashSet<&'a str>) {
   stack.push(node);
 
   while let Some(current) = stack.pop() {
+    if is_inert_html_template(current) {
+      continue;
+    }
+
     if matches!(current.node_type, DomNodeType::Slot { .. }) {
       out.insert(current.get_attribute_ref("name").unwrap_or(""));
     }
@@ -2703,6 +2714,10 @@ pub fn compute_slot_assignment_with_ids(
       }
     }
 
+    if is_inert_html_template(node) {
+      continue;
+    }
+
     for child in node.children.iter().rev() {
       stack.push((child, Some(node)));
     }
@@ -2868,6 +2883,10 @@ pub fn compute_part_export_map_with_ids(
       hosts.push(node);
     }
 
+    if is_inert_html_template(node) {
+      continue;
+    }
+
     for child in node.children.iter().rev() {
       traversal_stack.push(child);
     }
@@ -2895,6 +2914,8 @@ pub fn compute_part_export_map_with_ids(
     shadow_stack.push(shadow_root);
 
     while let Some(node) = shadow_stack.pop() {
+      let skip_children = is_inert_html_template(node);
+
       if let Some(parts) = node.get_attribute_ref("part") {
         let node_id = ids.get(&(node as *const DomNode)).copied().unwrap_or(0);
         for part in parts.split_ascii_whitespace() {
@@ -2915,6 +2936,10 @@ pub fn compute_part_export_map_with_ids(
             }
           }
         }
+      }
+
+      if skip_children {
+        continue;
       }
 
       for child in node.children.iter().rev() {
@@ -6371,6 +6396,18 @@ mod tests {
     None
   }
 
+  fn find_node_by_id<'a>(node: &'a DomNode, id: &str) -> Option<&'a DomNode> {
+    if node.get_attribute_ref("id") == Some(id) {
+      return Some(node);
+    }
+    for child in node.children.iter() {
+      if let Some(found) = find_node_by_id(child, id) {
+        return Some(found);
+      }
+    }
+    None
+  }
+
   fn contains_shadow_root(node: &DomNode) -> bool {
     if matches!(node.node_type, DomNodeType::ShadowRoot { .. }) {
       return true;
@@ -6579,6 +6616,124 @@ mod tests {
         .any(|child| child.get_attribute_ref("id") == Some("shadow")),
       "shadow root should include children from the declarative template"
     );
+  }
+
+  #[test]
+  fn inert_html_template_helper_matches_shadowroot_semantics() {
+    let missing_attr = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "template".to_string(),
+        namespace: String::new(),
+        attributes: vec![],
+      },
+      children: vec![],
+    };
+    assert!(is_inert_html_template(&missing_attr));
+
+    let invalid_attr = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "template".to_string(),
+        namespace: String::new(),
+        attributes: vec![("shadowroot".to_string(), "invalid".to_string())],
+      },
+      children: vec![],
+    };
+    assert!(is_inert_html_template(&invalid_attr));
+
+    let open_attr = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "template".to_string(),
+        namespace: String::new(),
+        attributes: vec![("shadowroot".to_string(), "open".to_string())],
+      },
+      children: vec![],
+    };
+    assert!(!is_inert_html_template(&open_attr));
+
+    let closed_attr = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "template".to_string(),
+        namespace: HTML_NAMESPACE.to_string(),
+        attributes: vec![("shadowrootmode".to_string(), "closed".to_string())],
+      },
+      children: vec![],
+    };
+    assert!(!is_inert_html_template(&closed_attr));
+  }
+
+  #[test]
+  fn inert_html_template_helper_treats_non_html_template_as_inert() {
+    let svg_template = DomNode {
+      node_type: DomNodeType::Element {
+        tag_name: "template".to_string(),
+        namespace: SVG_NAMESPACE.to_string(),
+        attributes: vec![("shadowroot".to_string(), "open".to_string())],
+      },
+      children: vec![],
+    };
+    assert!(is_inert_html_template(&svg_template));
+  }
+
+  #[test]
+  fn slot_assignment_ignores_template_contents() {
+    let html = "<div id='host'><template shadowroot='open'><template><slot id='tmpl' name='a'></slot></template><slot id='real' name='a'></slot></template><span id='light' slot='a'></span></div>";
+    let dom = parse_html(html).expect("parse html");
+    let ids = enumerate_dom_ids(&dom);
+    let assignment = compute_slot_assignment_with_ids(&dom, &ids);
+
+    let light = find_node_by_id(&dom, "light").expect("light node");
+    let real_slot = find_node_by_id(&dom, "real").expect("real slot");
+    let template_slot = find_node_by_id(&dom, "tmpl").expect("template slot");
+
+    let light_id = ids
+      .get(&(light as *const DomNode))
+      .copied()
+      .expect("light node id");
+    let real_id = ids
+      .get(&(real_slot as *const DomNode))
+      .copied()
+      .expect("real slot id");
+    let template_id = ids
+      .get(&(template_slot as *const DomNode))
+      .copied()
+      .expect("template slot id");
+
+    let assigned = assignment
+      .node_to_slot
+      .get(&light_id)
+      .expect("light assigned");
+    assert_eq!(assigned.slot_node_id, real_id);
+    assert_ne!(assigned.slot_node_id, template_id);
+  }
+
+  #[test]
+  fn part_export_map_ignores_template_contents() {
+    let html = "<div id='host'><template shadowroot='open'><template><div id='tmpl' part='x'></div></template><div id='real' part='x'></div></template></div>";
+    let dom = parse_html(html).expect("parse html");
+    let ids = enumerate_dom_ids(&dom);
+    let map = compute_part_export_map_with_ids(&dom, &ids);
+
+    let host = find_node_by_id(&dom, "host").expect("host");
+    let real = find_node_by_id(&dom, "real").expect("real part element");
+    let template = find_node_by_id(&dom, "tmpl").expect("template part element");
+
+    let host_id = ids
+      .get(&(host as *const DomNode))
+      .copied()
+      .expect("host id");
+    let real_id = ids
+      .get(&(real as *const DomNode))
+      .copied()
+      .expect("real id");
+    let template_id = ids
+      .get(&(template as *const DomNode))
+      .copied()
+      .expect("template id");
+
+    let exports = map.exports_for_host(host_id).expect("host export map");
+    let targets = exports.get("x").expect("part targets");
+    assert!(targets.contains(&real_id));
+    assert!(!targets.contains(&template_id));
   }
 
   fn matches(node: &DomNode, ancestors: &[&DomNode], pseudo: &PseudoClass) -> bool {

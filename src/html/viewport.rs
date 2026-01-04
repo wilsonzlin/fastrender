@@ -4,7 +4,7 @@
 //! real sites. It intentionally ignores unknown keys and malformed values to
 //! avoid derailing layout when authors provide non-standard tokens.
 
-use crate::dom::{DomNode, DomNodeType};
+use crate::dom::{is_inert_html_template, DomNode, DomNodeType};
 use crate::error::{Error, RenderStage, Result};
 use crate::render_control::check_active_periodic;
 
@@ -159,6 +159,10 @@ fn extract_viewport_impl(
       continue;
     }
 
+    if is_inert_html_template(node) {
+      continue;
+    }
+
     if let Some(tag) = node.tag_name() {
       if tag.eq_ignore_ascii_case("head") {
         head = Some(node);
@@ -201,10 +205,8 @@ fn extract_viewport_impl(
       }
     }
 
-    let skip_children = matches!(node.node_type, DomNodeType::ShadowRoot { .. })
-      || tag_name
-        .map(|t| t.eq_ignore_ascii_case("template"))
-        .unwrap_or(false);
+    let skip_children =
+      matches!(node.node_type, DomNodeType::ShadowRoot { .. }) || is_inert_html_template(node);
     if skip_children {
       continue;
     }

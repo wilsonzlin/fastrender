@@ -7,7 +7,7 @@
 
 use crate::css::loader::resolve_href_with_base;
 use crate::css::parser::tokenize_rel_list;
-use crate::dom::{DomNode, HTML_NAMESPACE};
+use crate::dom::{is_inert_html_template, DomNode};
 use crate::html::image_attrs::{parse_sizes, parse_srcset};
 use crate::html::images::{
   image_sources_with_fallback, select_image_source, ImageSelectionContext,
@@ -188,32 +188,6 @@ fn normalize_mime_type(value: &str) -> Option<String> {
   } else {
     Some(base.to_ascii_lowercase())
   }
-}
-
-fn is_inert_template(node: &DomNode) -> bool {
-  // Template contents are inert unless the template declares a shadow root.
-  if !node
-    .tag_name()
-    .map(|tag| tag.eq_ignore_ascii_case("template"))
-    .unwrap_or(false)
-  {
-    return false;
-  }
-
-  if let Some(namespace) = node.namespace() {
-    if !(namespace.is_empty() || namespace == HTML_NAMESPACE) {
-      return true;
-    }
-  }
-
-  let Some(mode_attr) = node
-    .get_attribute_ref("shadowroot")
-    .or_else(|| node.get_attribute_ref("shadowrootmode"))
-  else {
-    return true;
-  };
-
-  !(mode_attr.eq_ignore_ascii_case("open") || mode_attr.eq_ignore_ascii_case("closed"))
 }
 
 fn resolve_prefetch_url(ctx: ImageSelectionContext<'_>, raw: &str) -> Option<String> {
@@ -479,7 +453,7 @@ pub fn discover_image_prefetch_urls(
       return false;
     }
 
-    if is_inert_template(node) {
+    if is_inert_html_template(node) {
       return true;
     }
 

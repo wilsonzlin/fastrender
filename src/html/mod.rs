@@ -1,7 +1,7 @@
 //! HTML-specific helpers (encoding, parsing utilities)
 
-pub mod encoding;
 pub mod asset_discovery;
+pub mod encoding;
 pub mod image_attrs;
 pub mod image_prefetch;
 pub mod images;
@@ -9,7 +9,7 @@ pub mod meta_refresh;
 pub mod viewport;
 
 use crate::css::loader::resolve_href;
-use crate::dom::{DomNode, DomNodeType};
+use crate::dom::{is_inert_html_template, DomNode, DomNodeType};
 use url::Url;
 
 /// Find the first `<base href>` value within the document `<head>`.
@@ -21,12 +21,12 @@ pub fn find_base_href(dom: &DomNode) -> Option<String> {
     if matches!(node.node_type, DomNodeType::ShadowRoot { .. }) {
       return None;
     }
+    if is_inert_html_template(node) {
+      return None;
+    }
     if let Some(tag) = node.tag_name() {
       if tag.eq_ignore_ascii_case("head") {
         return Some(node);
-      }
-      if tag.eq_ignore_ascii_case("template") {
-        return None;
       }
     }
     for child in node.children.iter() {
@@ -41,10 +41,10 @@ pub fn find_base_href(dom: &DomNode) -> Option<String> {
     if matches!(node.node_type, DomNodeType::ShadowRoot { .. }) {
       return None;
     }
+    if is_inert_html_template(node) {
+      return None;
+    }
     if let Some(tag) = node.tag_name() {
-      if tag.eq_ignore_ascii_case("template") {
-        return None;
-      }
       if tag.eq_ignore_ascii_case("base") {
         if let Some(href) = node.get_attribute_ref("href") {
           let trimmed = href.trim();
