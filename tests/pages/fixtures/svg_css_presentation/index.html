@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>SVG CSS presentation properties</title>
+    <link rel="stylesheet" href="../assets/styles/base.css" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header style="margin-bottom: 10px">
+      <span class="pill">Vector coverage</span>
+      <h1>Inline SVG styled via CSS</h1>
+      <p class="muted">
+        Exercising SVG presentation properties (fill, stroke, dash arrays, fill-rule, opacity)
+        coming from computed CSS.
+      </p>
+    </header>
+
+    <section class="grid">
+      <div class="card svg-scope">
+        <strong class="card-title">Inherited fill/stroke from HTML ancestor</strong>
+        <div class="divider"></div>
+        <svg
+          class="demo-svg"
+          viewBox="0 0 220 140"
+          xmlns="http://www.w3.org/2000/svg"
+          aria-label="svg presentation demo"
+        >
+          <!-- Inherits fill/stroke/stroke-width from the HTML ancestor .svg-scope -->
+          <rect class="fade-fill" x="12" y="12" width="70" height="42" rx="6" />
+          <circle class="fade-stroke" cx="140" cy="34" r="20" fill="none" />
+
+          <!-- Dash patterns + cap styles -->
+          <line class="dashed" x1="12" y1="78" x2="208" y2="78" />
+
+          <!-- Fill-rule evenodd creates a "hole" in the middle -->
+          <path
+            class="evenodd"
+            d="M110 96H208V132H110Z M132 106H186V122H132Z"
+          />
+
+          <!-- Line join / miterlimit -->
+          <polyline class="join" points="12,132 48,98 84,132" fill="none" />
+        </svg>
+      </div>
+    </section>
+  </body>
+</html>
+

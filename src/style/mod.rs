@@ -79,6 +79,7 @@ use types::CaptionSide;
 use types::CaretColor;
 use types::ClipPath;
 use types::ClipRect;
+use types::ColorOrNone;
 use types::ColorSchemePreference;
 use types::ColumnFill;
 use types::ColumnSpan;
@@ -90,6 +91,7 @@ use types::CursorImage;
 use types::CursorKeyword;
 use types::Direction;
 use types::EmptyCells;
+use types::FillRule;
 use types::FilterFunction;
 use types::FlexBasis;
 use types::FlexDirection;
@@ -121,6 +123,7 @@ use types::ImageRendering;
 use types::ImageResolution;
 use types::Isolation;
 use types::JustifyContent;
+use types::LengthOrNumber;
 use types::LineBreak;
 use types::LineHeight;
 use types::ListStyleImage;
@@ -157,6 +160,9 @@ use types::ScrollbarColor;
 use types::ScrollbarGutter;
 use types::ScrollbarWidth;
 use types::ShapeOutside;
+use types::StrokeDasharray;
+use types::StrokeLinecap;
+use types::StrokeLinejoin;
 use types::TabSize;
 use types::TableLayout;
 use types::TextAlign;
@@ -741,6 +747,20 @@ pub struct ComputedStyle {
   pub caret_color: CaretColor,
   pub accent_color: AccentColor,
   pub color: Rgba,
+
+  // SVG presentation properties (used when serializing inline SVG for resvg)
+  pub svg_fill: Option<ColorOrNone>,
+  pub svg_stroke: Option<ColorOrNone>,
+  pub svg_stroke_width: Option<LengthOrNumber>,
+  pub svg_fill_rule: Option<FillRule>,
+  pub svg_stroke_linecap: Option<StrokeLinecap>,
+  pub svg_stroke_linejoin: Option<StrokeLinejoin>,
+  pub svg_stroke_miterlimit: Option<f32>,
+  pub svg_stroke_dasharray: Option<StrokeDasharray>,
+  pub svg_stroke_dashoffset: Option<LengthOrNumber>,
+  pub svg_fill_opacity: Option<f32>,
+  pub svg_stroke_opacity: Option<f32>,
+
   pub background_color: Rgba,
   /// Author-specified background values (lists preserved for layer repetition rules)
   pub background_images: Arc<[Option<BackgroundImage>]>,
@@ -1072,6 +1092,17 @@ impl Default for ComputedStyle {
       caret_color: CaretColor::Auto,
       accent_color: AccentColor::Auto,
       color: Rgba::BLACK,
+      svg_fill: None,
+      svg_stroke: None,
+      svg_stroke_width: None,
+      svg_fill_rule: None,
+      svg_stroke_linecap: None,
+      svg_stroke_linejoin: None,
+      svg_stroke_miterlimit: None,
+      svg_stroke_dasharray: None,
+      svg_stroke_dashoffset: None,
+      svg_fill_opacity: None,
+      svg_stroke_opacity: None,
       background_color: Rgba::TRANSPARENT,
       background_images: vec![default_layer.image.clone()].into(),
       background_positions: vec![default_layer.position.clone()].into(),
@@ -1238,21 +1269,42 @@ impl ComputedStyle {
     } else {
       layers
     };
-    self.background_images = normalized.iter().map(|l| l.image.clone()).collect::<Vec<_>>().into();
+    self.background_images = normalized
+      .iter()
+      .map(|l| l.image.clone())
+      .collect::<Vec<_>>()
+      .into();
     self.background_positions = normalized
       .iter()
       .map(|l| l.position.clone())
       .collect::<Vec<_>>()
       .into();
-    self.background_sizes =
-      normalized.iter().map(|l| l.size.clone()).collect::<Vec<_>>().into();
-    self.background_repeats = normalized.iter().map(|l| l.repeat).collect::<Vec<_>>().into();
-    self.background_attachments =
-      normalized.iter().map(|l| l.attachment).collect::<Vec<_>>().into();
-    self.background_origins = normalized.iter().map(|l| l.origin).collect::<Vec<_>>().into();
+    self.background_sizes = normalized
+      .iter()
+      .map(|l| l.size.clone())
+      .collect::<Vec<_>>()
+      .into();
+    self.background_repeats = normalized
+      .iter()
+      .map(|l| l.repeat)
+      .collect::<Vec<_>>()
+      .into();
+    self.background_attachments = normalized
+      .iter()
+      .map(|l| l.attachment)
+      .collect::<Vec<_>>()
+      .into();
+    self.background_origins = normalized
+      .iter()
+      .map(|l| l.origin)
+      .collect::<Vec<_>>()
+      .into();
     self.background_clips = normalized.iter().map(|l| l.clip).collect::<Vec<_>>().into();
-    self.background_blend_modes =
-      normalized.iter().map(|l| l.blend_mode).collect::<Vec<_>>().into();
+    self.background_blend_modes = normalized
+      .iter()
+      .map(|l| l.blend_mode)
+      .collect::<Vec<_>>()
+      .into();
     self.background_layers = SmallVec::from_vec(normalized);
   }
 
@@ -1335,16 +1387,38 @@ impl ComputedStyle {
     } else {
       layers
     };
-    self.mask_images = normalized.iter().map(|l| l.image.clone()).collect::<Vec<_>>().into();
-    self.mask_positions =
-      normalized.iter().map(|l| l.position.clone()).collect::<Vec<_>>().into();
-    self.mask_sizes = normalized.iter().map(|l| l.size.clone()).collect::<Vec<_>>().into();
-    self.mask_repeats = normalized.iter().map(|l| l.repeat).collect::<Vec<_>>().into();
+    self.mask_images = normalized
+      .iter()
+      .map(|l| l.image.clone())
+      .collect::<Vec<_>>()
+      .into();
+    self.mask_positions = normalized
+      .iter()
+      .map(|l| l.position.clone())
+      .collect::<Vec<_>>()
+      .into();
+    self.mask_sizes = normalized
+      .iter()
+      .map(|l| l.size.clone())
+      .collect::<Vec<_>>()
+      .into();
+    self.mask_repeats = normalized
+      .iter()
+      .map(|l| l.repeat)
+      .collect::<Vec<_>>()
+      .into();
     self.mask_modes = normalized.iter().map(|l| l.mode).collect::<Vec<_>>().into();
-    self.mask_origins = normalized.iter().map(|l| l.origin).collect::<Vec<_>>().into();
+    self.mask_origins = normalized
+      .iter()
+      .map(|l| l.origin)
+      .collect::<Vec<_>>()
+      .into();
     self.mask_clips = normalized.iter().map(|l| l.clip).collect::<Vec<_>>().into();
-    self.mask_composites =
-      normalized.iter().map(|l| l.composite).collect::<Vec<_>>().into();
+    self.mask_composites = normalized
+      .iter()
+      .map(|l| l.composite)
+      .collect::<Vec<_>>()
+      .into();
     self.mask_layers = SmallVec::from_vec(normalized);
   }
 

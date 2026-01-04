@@ -2558,11 +2558,22 @@ fn is_inherited_property(name: &str) -> bool {
       | "justify-items"
       | "caption-side"
       | "empty-cells"
+      | "fill"
+      | "fill-opacity"
+      | "fill-rule"
       | "list-style-type"
       | "list-style-position"
       | "list-style-image"
       | "list-style"
       | "quotes"
+      | "stroke"
+      | "stroke-dasharray"
+      | "stroke-dashoffset"
+      | "stroke-linecap"
+      | "stroke-linejoin"
+      | "stroke-miterlimit"
+      | "stroke-opacity"
+      | "stroke-width"
   )
 }
 
@@ -4134,6 +4145,17 @@ fn apply_property_from_source(
     "color-scheme" => styles.color_scheme = source.color_scheme.clone(),
     "color" => styles.color = source.color,
     "background-color" => styles.background_color = source.background_color,
+    "fill" => styles.svg_fill = source.svg_fill,
+    "stroke" => styles.svg_stroke = source.svg_stroke,
+    "stroke-width" => styles.svg_stroke_width = source.svg_stroke_width,
+    "fill-rule" => styles.svg_fill_rule = source.svg_fill_rule,
+    "stroke-linecap" => styles.svg_stroke_linecap = source.svg_stroke_linecap,
+    "stroke-linejoin" => styles.svg_stroke_linejoin = source.svg_stroke_linejoin,
+    "stroke-miterlimit" => styles.svg_stroke_miterlimit = source.svg_stroke_miterlimit,
+    "stroke-dasharray" => styles.svg_stroke_dasharray = source.svg_stroke_dasharray.clone(),
+    "stroke-dashoffset" => styles.svg_stroke_dashoffset = source.svg_stroke_dashoffset,
+    "fill-opacity" => styles.svg_fill_opacity = source.svg_fill_opacity,
+    "stroke-opacity" => styles.svg_stroke_opacity = source.svg_stroke_opacity,
     "background-image" => {
       styles.background_images = source.background_images.clone();
       styles.rebuild_background_layers();
@@ -5207,6 +5229,181 @@ fn apply_declaration_with_base_internal(
       PropertyValue::Color(c) => Some(c.to_rgba(styles.color)),
       PropertyValue::Keyword(kw) if kw.eq_ignore_ascii_case("currentcolor") => Some(styles.color),
       _ => None,
+    }
+  };
+
+  let resolve_svg_color_or_none = |value: &PropertyValue| -> Option<ColorOrNone> {
+    match value {
+      PropertyValue::Keyword(kw) if kw.eq_ignore_ascii_case("none") => Some(ColorOrNone::None),
+      _ => {
+        if let Some(rgba) = resolve_color_value(value) {
+          return Some(ColorOrNone::Color(rgba));
+        }
+        if let PropertyValue::Keyword(kw) = value {
+          if let Ok(color) = Color::parse(kw) {
+            return Some(ColorOrNone::Color(color.to_rgba(styles.color)));
+          }
+        }
+        None
+      }
+    }
+  };
+
+  let resolve_svg_length_or_number = |value: &PropertyValue| -> Option<LengthOrNumber> {
+    match value {
+      PropertyValue::Length(len) => Some(LengthOrNumber::Length(*len)),
+      PropertyValue::Number(num) => Some(LengthOrNumber::Number(*num)),
+      PropertyValue::Percentage(num) => Some(LengthOrNumber::Length(Length::percent(*num))),
+      PropertyValue::Keyword(kw) => parse_length(kw)
+        .map(LengthOrNumber::Length)
+        .or_else(|| kw.parse::<f32>().ok().map(LengthOrNumber::Number)),
+      _ => None,
+    }
+  };
+
+  let resolve_svg_opacity = |value: &PropertyValue| -> Option<f32> {
+    match value {
+      PropertyValue::Number(num) => Some(num.clamp(0.0, 1.0)),
+      PropertyValue::Percentage(num) => Some((num / 100.0).clamp(0.0, 1.0)),
+      PropertyValue::Length(len)
+        if len.calc.is_none() && matches!(len.unit, LengthUnit::Percent) =>
+      {
+        Some((len.value / 100.0).clamp(0.0, 1.0))
+      }
+      PropertyValue::Keyword(kw) => {
+        if let Ok(num) = kw.parse::<f32>() {
+          return Some(num.clamp(0.0, 1.0));
+        }
+        parse_length(kw)
+          .filter(|len| len.calc.is_none() && matches!(len.unit, LengthUnit::Percent))
+          .map(|len| (len.value / 100.0).clamp(0.0, 1.0))
+      }
+      _ => None,
+    }
+  };
+
+  let parse_svg_dasharray = |value: &PropertyValue| -> Option<StrokeDasharray> {
+    fn length_unit_from_str(unit: &str) -> Option<LengthUnit> {
+      Some(match unit {
+        u if u.eq_ignore_ascii_case("px") => LengthUnit::Px,
+        u if u.eq_ignore_ascii_case("pt") => LengthUnit::Pt,
+        u if u.eq_ignore_ascii_case("pc") => LengthUnit::Pc,
+        u if u.eq_ignore_ascii_case("in") => LengthUnit::In,
+        u if u.eq_ignore_ascii_case("cm") => LengthUnit::Cm,
+        u if u.eq_ignore_ascii_case("mm") => LengthUnit::Mm,
+        u if u.eq_ignore_ascii_case("q") => LengthUnit::Q,
+        u if u.eq_ignore_ascii_case("em") => LengthUnit::Em,
+        u if u.eq_ignore_ascii_case("rem") => LengthUnit::Rem,
+        u if u.eq_ignore_ascii_case("ex") => LengthUnit::Ex,
+        u if u.eq_ignore_ascii_case("ch") => LengthUnit::Ch,
+        u if u.eq_ignore_ascii_case("vw") => LengthUnit::Vw,
+        u if u.eq_ignore_ascii_case("vh") => LengthUnit::Vh,
+        u if u.eq_ignore_ascii_case("vmin") => LengthUnit::Vmin,
+        u if u.eq_ignore_ascii_case("vmax") => LengthUnit::Vmax,
+        u if u.eq_ignore_ascii_case("dvw") => LengthUnit::Dvw,
+        u if u.eq_ignore_ascii_case("dvh") => LengthUnit::Dvh,
+        u if u.eq_ignore_ascii_case("dvmin") => LengthUnit::Dvmin,
+        u if u.eq_ignore_ascii_case("dvmax") => LengthUnit::Dvmax,
+        u if u == "%" => LengthUnit::Percent,
+        _ => return None,
+      })
+    }
+
+    let parse_token = |token: &Token| -> Option<LengthOrNumber> {
+      match token {
+        Token::Number { value, .. } => {
+          if !value.is_finite() || *value < 0.0 {
+            return None;
+          }
+          Some(LengthOrNumber::Number(*value))
+        }
+        Token::Percentage { unit_value, .. } => {
+          if !unit_value.is_finite() || *unit_value < 0.0 {
+            return None;
+          }
+          Some(LengthOrNumber::Length(Length::percent(*unit_value)))
+        }
+        Token::Dimension { value, unit, .. } => {
+          if !value.is_finite() || *value < 0.0 {
+            return None;
+          }
+          let unit = length_unit_from_str(unit.as_ref())?;
+          Some(LengthOrNumber::Length(Length::new(*value, unit)))
+        }
+        _ => None,
+      }
+    };
+
+    match value {
+      PropertyValue::Keyword(kw) => {
+        let trimmed = kw.trim();
+        if trimmed.is_empty() {
+          return None;
+        }
+        if trimmed.eq_ignore_ascii_case("none") {
+          return Some(StrokeDasharray::None);
+        }
+
+        let mut input = ParserInput::new(trimmed);
+        let mut parser = Parser::new(&mut input);
+        let mut items: Vec<LengthOrNumber> = Vec::new();
+        let mut need_value_after_comma = false;
+        while !parser.is_exhausted() {
+          let token = parser.next().ok()?;
+          match token {
+            Token::Comma => {
+              if items.is_empty() || need_value_after_comma {
+                return None;
+              }
+              need_value_after_comma = true;
+            }
+            _ => {
+              let parsed = parse_token(token)?;
+              items.push(parsed);
+              need_value_after_comma = false;
+            }
+          }
+        }
+        if need_value_after_comma || items.is_empty() {
+          return None;
+        }
+        Some(StrokeDasharray::Values(items.into()))
+      }
+      PropertyValue::Multiple(parts) => {
+        let mut items = Vec::new();
+        for part in parts {
+          match part {
+            PropertyValue::Keyword(kw) if kw == "," => continue,
+            PropertyValue::Keyword(kw) if kw.eq_ignore_ascii_case("none") => {
+              return Some(StrokeDasharray::None);
+            }
+            _ => {
+              let item = resolve_svg_length_or_number(part)?;
+              match item {
+                LengthOrNumber::Number(v) if v < 0.0 => return None,
+                LengthOrNumber::Length(len) if len.calc.is_none() && len.value < 0.0 => {
+                  return None
+                }
+                _ => {}
+              }
+              items.push(item);
+            }
+          }
+        }
+        if items.is_empty() {
+          None
+        } else {
+          Some(StrokeDasharray::Values(items.into()))
+        }
+      }
+      _ => {
+        let single = resolve_svg_length_or_number(value)?;
+        match single {
+          LengthOrNumber::Number(v) if v < 0.0 => None,
+          LengthOrNumber::Length(len) if len.calc.is_none() && len.value < 0.0 => None,
+          _ => Some(StrokeDasharray::Values(vec![single].into())),
+        }
+      }
     }
   };
 
@@ -8853,6 +9050,98 @@ fn apply_declaration_with_base_internal(
     "background-color" => {
       if let Some(c) = resolve_color_value(resolved_value) {
         styles.background_color = c;
+      }
+    }
+
+    // SVG presentation properties
+    "fill" => {
+      if let Some(value) = resolve_svg_color_or_none(resolved_value) {
+        styles.svg_fill = Some(value);
+      }
+    }
+    "stroke" => {
+      if let Some(value) = resolve_svg_color_or_none(resolved_value) {
+        styles.svg_stroke = Some(value);
+      }
+    }
+    "stroke-width" => {
+      if let Some(value) = resolve_svg_length_or_number(resolved_value) {
+        let valid = match value {
+          LengthOrNumber::Number(v) => v.is_finite() && v >= 0.0,
+          LengthOrNumber::Length(len) => {
+            len.calc.is_none() && len.value.is_finite() && len.value >= 0.0
+          }
+        };
+        if valid {
+          styles.svg_stroke_width = Some(value);
+        }
+      }
+    }
+    "fill-rule" => {
+      if let PropertyValue::Keyword(kw) = resolved_value {
+        if kw.eq_ignore_ascii_case("nonzero") {
+          styles.svg_fill_rule = Some(FillRule::NonZero);
+        } else if kw.eq_ignore_ascii_case("evenodd") {
+          styles.svg_fill_rule = Some(FillRule::EvenOdd);
+        }
+      }
+    }
+    "stroke-linecap" => {
+      if let PropertyValue::Keyword(kw) = resolved_value {
+        if kw.eq_ignore_ascii_case("butt") {
+          styles.svg_stroke_linecap = Some(StrokeLinecap::Butt);
+        } else if kw.eq_ignore_ascii_case("round") {
+          styles.svg_stroke_linecap = Some(StrokeLinecap::Round);
+        } else if kw.eq_ignore_ascii_case("square") {
+          styles.svg_stroke_linecap = Some(StrokeLinecap::Square);
+        }
+      }
+    }
+    "stroke-linejoin" => {
+      if let PropertyValue::Keyword(kw) = resolved_value {
+        if kw.eq_ignore_ascii_case("miter") {
+          styles.svg_stroke_linejoin = Some(StrokeLinejoin::Miter);
+        } else if kw.eq_ignore_ascii_case("round") {
+          styles.svg_stroke_linejoin = Some(StrokeLinejoin::Round);
+        } else if kw.eq_ignore_ascii_case("bevel") {
+          styles.svg_stroke_linejoin = Some(StrokeLinejoin::Bevel);
+        }
+      }
+    }
+    "stroke-miterlimit" => {
+      let parsed = match resolved_value {
+        PropertyValue::Number(num) => Some(*num),
+        PropertyValue::Keyword(kw) => kw.parse::<f32>().ok(),
+        _ => None,
+      };
+      if let Some(value) = parsed.filter(|v| v.is_finite() && *v >= 1.0) {
+        styles.svg_stroke_miterlimit = Some(value);
+      }
+    }
+    "stroke-dasharray" => {
+      if let Some(value) = parse_svg_dasharray(resolved_value) {
+        styles.svg_stroke_dasharray = Some(value);
+      }
+    }
+    "stroke-dashoffset" => {
+      if let Some(value) = resolve_svg_length_or_number(resolved_value) {
+        let valid = match value {
+          LengthOrNumber::Number(v) => v.is_finite(),
+          LengthOrNumber::Length(len) => len.calc.is_none() && len.value.is_finite(),
+        };
+        if valid {
+          styles.svg_stroke_dashoffset = Some(value);
+        }
+      }
+    }
+    "fill-opacity" => {
+      if let Some(value) = resolve_svg_opacity(resolved_value) {
+        styles.svg_fill_opacity = Some(value);
+      }
+    }
+    "stroke-opacity" => {
+      if let Some(value) = resolve_svg_opacity(resolved_value) {
+        styles.svg_stroke_opacity = Some(value);
       }
     }
 
@@ -14183,6 +14472,8 @@ mod tests {
   use crate::style::types::BorderImageSource;
   use crate::style::types::BoxSizing;
   use crate::style::types::CaseTransform;
+  use crate::style::types::ColorOrNone;
+  use crate::style::types::FillRule;
   use crate::style::types::FlexDirection;
   use crate::style::types::FlexWrap;
   use crate::style::types::FontPalette;
@@ -14194,6 +14485,7 @@ mod tests {
   use crate::style::types::ImageRendering;
   use crate::style::types::ImageResolution;
   use crate::style::types::JustifyContent;
+  use crate::style::types::LengthOrNumber;
   use crate::style::types::ListStyleImage;
   use crate::style::types::ListStylePosition;
   use crate::style::types::ListStyleType;
@@ -14209,6 +14501,9 @@ mod tests {
   use crate::style::types::ScrollSnapStrictness;
   use crate::style::types::ShapeOutside;
   use crate::style::types::ShapeRadius;
+  use crate::style::types::StrokeDasharray;
+  use crate::style::types::StrokeLinecap;
+  use crate::style::types::StrokeLinejoin;
   use crate::style::types::TextCombineUpright;
   use crate::style::types::TextDecorationLine;
   use crate::style::types::TextDecorationStyle;
@@ -14438,6 +14733,181 @@ mod tests {
       crate::css::types::ScaleValue::Values { x: 1.0, y: 2.0, z: 1.0 }
     );
     assert!(styles.has_transform());
+
+  }
+
+  #[test]
+  fn svg_presentation_properties_parse_and_apply() {
+    let parent = ComputedStyle::default();
+    let mut style = ComputedStyle::default();
+
+    let fill = parse_property_value("fill", "red").expect("fill");
+    apply_declaration(
+      &mut style,
+      &Declaration {
+        property: "fill".into(),
+        value: fill,
+        contains_var: false,
+        raw_value: String::new(),
+        important: false,
+      },
+      &parent,
+      16.0,
+      16.0,
+    );
+    assert_eq!(style.svg_fill, Some(ColorOrNone::Color(Rgba::RED)));
+
+    let stroke = parse_property_value("stroke", "currentColor").expect("stroke");
+    style.color = Rgba::BLUE;
+    apply_declaration(
+      &mut style,
+      &Declaration {
+        property: "stroke".into(),
+        value: stroke,
+        contains_var: false,
+        raw_value: String::new(),
+        important: false,
+      },
+      &parent,
+      16.0,
+      16.0,
+    );
+    assert_eq!(style.svg_stroke, Some(ColorOrNone::Color(Rgba::BLUE)));
+
+    let stroke_width = parse_property_value("stroke-width", "4").expect("stroke-width");
+    apply_declaration(
+      &mut style,
+      &Declaration {
+        property: "stroke-width".into(),
+        value: stroke_width,
+        contains_var: false,
+        raw_value: String::new(),
+        important: false,
+      },
+      &parent,
+      16.0,
+      16.0,
+    );
+    assert_eq!(style.svg_stroke_width, Some(LengthOrNumber::Number(4.0)));
+
+    let dasharray = parse_property_value("stroke-dasharray", "6 3").expect("dasharray");
+    apply_declaration(
+      &mut style,
+      &Declaration {
+        property: "stroke-dasharray".into(),
+        value: dasharray,
+        contains_var: false,
+        raw_value: String::new(),
+        important: false,
+      },
+      &parent,
+      16.0,
+      16.0,
+    );
+    assert_eq!(
+      style.svg_stroke_dasharray,
+      Some(StrokeDasharray::Values(
+        vec![LengthOrNumber::Number(6.0), LengthOrNumber::Number(3.0)].into()
+      ))
+    );
+
+    let fill_rule = parse_property_value("fill-rule", "evenodd").expect("fill-rule");
+    apply_declaration(
+      &mut style,
+      &Declaration {
+        property: "fill-rule".into(),
+        value: fill_rule,
+        contains_var: false,
+        raw_value: String::new(),
+        important: false,
+      },
+      &parent,
+      16.0,
+      16.0,
+    );
+    assert_eq!(style.svg_fill_rule, Some(FillRule::EvenOdd));
+
+    let linecap = parse_property_value("stroke-linecap", "round").expect("linecap");
+    apply_declaration(
+      &mut style,
+      &Declaration {
+        property: "stroke-linecap".into(),
+        value: linecap,
+        contains_var: false,
+        raw_value: String::new(),
+        important: false,
+      },
+      &parent,
+      16.0,
+      16.0,
+    );
+    assert_eq!(style.svg_stroke_linecap, Some(StrokeLinecap::Round));
+
+    let linejoin = parse_property_value("stroke-linejoin", "bevel").expect("linejoin");
+    apply_declaration(
+      &mut style,
+      &Declaration {
+        property: "stroke-linejoin".into(),
+        value: linejoin,
+        contains_var: false,
+        raw_value: String::new(),
+        important: false,
+      },
+      &parent,
+      16.0,
+      16.0,
+    );
+    assert_eq!(style.svg_stroke_linejoin, Some(StrokeLinejoin::Bevel));
+
+    let opacity = parse_property_value("fill-opacity", "50%").expect("fill-opacity");
+    apply_declaration(
+      &mut style,
+      &Declaration {
+        property: "fill-opacity".into(),
+        value: opacity,
+        contains_var: false,
+        raw_value: String::new(),
+        important: false,
+      },
+      &parent,
+      16.0,
+      16.0,
+    );
+    assert_eq!(style.svg_fill_opacity, Some(0.5));
+
+    // Invalid values should not override existing computed values.
+    let limit = parse_property_value("stroke-miterlimit", "4").expect("stroke-miterlimit");
+    apply_declaration(
+      &mut style,
+      &Declaration {
+        property: "stroke-miterlimit".into(),
+        value: limit,
+        contains_var: false,
+        raw_value: String::new(),
+        important: false,
+      },
+      &parent,
+      16.0,
+      16.0,
+    );
+    assert_eq!(style.svg_stroke_miterlimit, Some(4.0));
+
+    let prev = style.svg_stroke_miterlimit;
+    let invalid = parse_property_value("stroke-miterlimit", "0.5").expect("stroke-miterlimit");
+    apply_declaration(
+      &mut style,
+      &Declaration {
+        property: "stroke-miterlimit".into(),
+        value: invalid,
+        contains_var: false,
+        raw_value: String::new(),
+        important: false,
+      },
+      &parent,
+      16.0,
+      16.0,
+    );
+    assert_eq!(style.svg_stroke_miterlimit, prev);
   }
 
   #[test]

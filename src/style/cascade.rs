@@ -9719,6 +9719,19 @@ pub(crate) fn inherit_styles(styles: &mut ComputedStyle, parent: &ComputedStyle)
   // Color inherits
   styles.color = parent.color;
 
+  // SVG presentation properties inherit per SVG/CSS painting rules.
+  styles.svg_fill = parent.svg_fill;
+  styles.svg_stroke = parent.svg_stroke;
+  styles.svg_stroke_width = parent.svg_stroke_width;
+  styles.svg_fill_rule = parent.svg_fill_rule;
+  styles.svg_stroke_linecap = parent.svg_stroke_linecap;
+  styles.svg_stroke_linejoin = parent.svg_stroke_linejoin;
+  styles.svg_stroke_miterlimit = parent.svg_stroke_miterlimit;
+  styles.svg_stroke_dasharray = parent.svg_stroke_dasharray.clone();
+  styles.svg_stroke_dashoffset = parent.svg_stroke_dashoffset;
+  styles.svg_fill_opacity = parent.svg_fill_opacity;
+  styles.svg_stroke_opacity = parent.svg_stroke_opacity;
+
   // CSS Custom Properties inherit according to registration.
   styles.custom_property_registry = parent.custom_property_registry.clone();
   styles.custom_properties = parent.custom_properties.clone();

@@ -217,6 +217,9 @@ const KNOWN_STYLE_PROPERTIES: &[&str] = &[
   "direction",
   "display",
   "empty-cells",
+  "fill",
+  "fill-opacity",
+  "fill-rule",
   "filter",
   "flex",
   "flex-basis",
@@ -458,6 +461,14 @@ const KNOWN_STYLE_PROPERTIES: &[&str] = &[
   "visibility",
   "white-space",
   "width",
+  "stroke",
+  "stroke-dasharray",
+  "stroke-dashoffset",
+  "stroke-linecap",
+  "stroke-linejoin",
+  "stroke-miterlimit",
+  "stroke-opacity",
+  "stroke-width",
   "string-set",
   "will-change",
   "word-break",
@@ -1489,6 +1500,8 @@ fn parse_known_property_value(property: &str, value_str: &str) -> Option<Propert
       | "border-right-color"
       | "border-bottom-color"
       | "border-left-color"
+      | "fill"
+      | "stroke"
   ) {
     if let Ok(color) = Color::parse(value_str) {
       return match color {

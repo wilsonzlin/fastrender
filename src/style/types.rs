@@ -9,6 +9,7 @@ use crate::css::types::RadialGradientSize;
 use crate::style::color::Rgba;
 use crate::style::values::Length;
 pub use crate::text::hyphenation::HyphensMode;
+use std::sync::Arc;
 
 /// Text direction
 ///
@@ -764,6 +765,47 @@ impl Default for AccentColor {
   fn default() -> Self {
     AccentColor::Auto
   }
+}
+
+/// SVG paint property value that can be a color or `none`.
+///
+/// Used for core SVG presentation properties like `fill` and `stroke`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ColorOrNone {
+  Color(Rgba),
+  None,
+}
+
+/// SVG length list items that accept either a `<length>` or a unitless number.
+///
+/// Used for SVG presentation properties like `stroke-width` and `stroke-dasharray`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum LengthOrNumber {
+  Length(Length),
+  Number(f32),
+}
+
+/// SVG `stroke-linecap` presentation property.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StrokeLinecap {
+  Butt,
+  Round,
+  Square,
+}
+
+/// SVG `stroke-linejoin` presentation property.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StrokeLinejoin {
+  Miter,
+  Round,
+  Bevel,
+}
+
+/// SVG `stroke-dasharray` presentation property.
+#[derive(Debug, Clone, PartialEq)]
+pub enum StrokeDasharray {
+  None,
+  Values(Arc<[LengthOrNumber]>),
 }
 
 /// Computed value for `appearance`

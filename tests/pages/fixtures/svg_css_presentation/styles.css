@@ -1,0 +1,44 @@
+.svg-scope {
+  /* Intentionally set on the HTML ancestor (not the <svg>) to validate inheritance. */
+  fill: rgb(37, 99, 235);
+  stroke: rgb(217, 70, 239);
+  stroke-width: 4;
+}
+
+.demo-svg {
+  width: 520px;
+  height: 300px;
+  background: rgba(255, 255, 255, 0.85);
+  border-radius: 10px;
+}
+
+.fade-fill {
+  fill-opacity: 0.4;
+}
+
+.fade-stroke {
+  stroke-opacity: 0.4;
+}
+
+.dashed {
+  fill: none;
+  stroke: rgb(15, 23, 42);
+  stroke-width: 6px;
+  stroke-dasharray: 12 7;
+  stroke-dashoffset: 5;
+  stroke-linecap: round;
+}
+
+.evenodd {
+  stroke: none;
+  fill-rule: evenodd;
+}
+
+.join {
+  stroke: rgb(249, 115, 22);
+  stroke-width: 10;
+  stroke-linejoin: miter;
+  stroke-miterlimit: 1;
+  stroke-linecap: square;
+}
+
