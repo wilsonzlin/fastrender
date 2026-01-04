@@ -767,6 +767,7 @@ fn apply_filters(
   filters: &[ResolvedFilter],
   scale: f32,
   bbox: Rect,
+  svg_inputs: crate::paint::svg_filter::SvgFilterStandardInputs,
   mut cache: Option<&mut (dyn BlurCacheOps + 'static)>,
 ) -> RenderResult<()> {
   for filter in filters {
@@ -837,6 +838,7 @@ fn apply_filters(
           pixmap,
           scale,
           bbox,
+          svg_inputs,
           cache.as_deref_mut(),
         )?;
       }
@@ -852,17 +854,34 @@ fn apply_filters_scoped(
   bbox: Rect,
   bounds: Option<&Rect>,
   cache: Option<&mut (dyn BlurCacheOps + 'static)>,
+  backdrop: Option<&Pixmap>,
+  backdrop_origin: (i32, i32),
 ) -> RenderResult<()> {
   if filters.is_empty() {
     return Ok(());
   }
   check_active(RenderStage::Paint)?;
 
-  let Some(bounds) = bounds else {
-    apply_filters(pixmap, filters, scale, bbox, cache)?;
-    return Ok(());
-  };
+  let needs_background = backdrop.is_some()
+    && filters.iter().any(|filter| match filter {
+      ResolvedFilter::SvgFilter(filter) => filter.uses_background_inputs(),
+      _ => false,
+    });
 
+  // If there is no bounding region, or if the bounds cover the full pixmap, apply filters in-place.
+  if bounds.is_none() {
+    return apply_filters_with_optional_svg_backdrop(
+      pixmap,
+      filters,
+      scale,
+      bbox,
+      cache,
+      needs_background.then_some(backdrop).flatten(),
+      backdrop_origin,
+    );
+  }
+
+  let bounds = bounds.unwrap();
   let x = bounds.min_x().floor() as i32;
   let y = bounds.min_y().floor() as i32;
   let width = bounds.width().ceil() as u32;
@@ -888,8 +907,15 @@ fn apply_filters_scoped(
   }
 
   if region_w == pixmap.width() && region_h == pixmap.height() && clamped_x == 0 && clamped_y == 0 {
-    apply_filters(pixmap, filters, scale, bbox, cache)?;
-    return Ok(());
+    return apply_filters_with_optional_svg_backdrop(
+      pixmap,
+      filters,
+      scale,
+      bbox,
+      cache,
+      needs_background.then_some(backdrop).flatten(),
+      backdrop_origin,
+    );
   }
 
   let mut scratch = BACKDROP_FILTER_SCRATCH.with(|cell| std::mem::take(&mut *cell.borrow_mut()));
@@ -901,12 +927,20 @@ fn apply_filters_scoped(
         BACKDROP_FILTER_SCRATCH.with(|cell| {
           *cell.borrow_mut() = scratch;
         });
-        apply_filters(pixmap, filters, scale, bbox, cache)?;
-        return Ok(());
+        return apply_filters_with_optional_svg_backdrop(
+          pixmap,
+          filters,
+          scale,
+          bbox,
+          cache,
+          needs_background.then_some(backdrop).flatten(),
+          backdrop_origin,
+        );
       }
     },
   };
 
+  // Copy the pixels that are being filtered into a compact scratch pixmap.
   let bytes_per_row = pixmap.width() as usize * 4;
   let region_row_bytes = region_w as usize * 4;
   let start = (clamped_y as usize * bytes_per_row) + clamped_x as usize * 4;
@@ -932,14 +966,55 @@ fn apply_filters_scoped(
     return Err(err);
   }
 
+  // Snapshot the already-composited backdrop behind this region if any SVG filter needs it.
+  let mut svg_backdrop_pixmap: Option<Pixmap> = None;
+  if needs_background {
+    if let Some(backdrop) = backdrop {
+      let backdrop_pixmap = match scratch.svg_backdrop.take() {
+        Some(existing) if existing.width() == region_w && existing.height() == region_h => {
+          Some(existing)
+        }
+        other => {
+          scratch.svg_backdrop = other;
+          new_pixmap(region_w, region_h)
+        }
+      };
+
+      if let Some(mut backdrop_pixmap) = backdrop_pixmap {
+        backdrop_pixmap.data_mut().fill(0);
+        let src_x = backdrop_origin.0.saturating_add(clamped_x as i32);
+        let src_y = backdrop_origin.1.saturating_add(clamped_y as i32);
+        if let Err(err) =
+          copy_pixmap_region_with_offset(&mut backdrop_pixmap, backdrop, src_x, src_y)
+        {
+          scratch.region = Some(region);
+          scratch.svg_backdrop = Some(backdrop_pixmap);
+          BACKDROP_FILTER_SCRATCH.with(|cell| {
+            *cell.borrow_mut() = scratch;
+          });
+          return Err(err);
+        }
+        svg_backdrop_pixmap = Some(backdrop_pixmap);
+      }
+    }
+  }
+
   let local_bbox = Rect::from_xywh(
     bbox.x() - clamped_x as f32,
     bbox.y() - clamped_y as f32,
     bbox.width(),
     bbox.height(),
   );
-  if let Err(err) = apply_filters(&mut region, filters, scale, local_bbox, cache) {
+  let svg_inputs = crate::paint::svg_filter::SvgFilterStandardInputs {
+    background_image: svg_backdrop_pixmap.as_ref(),
+    ..Default::default()
+  };
+
+  if let Err(err) = apply_filters(&mut region, filters, scale, local_bbox, svg_inputs, cache) {
     scratch.region = Some(region);
+    if let Some(backdrop_pixmap) = svg_backdrop_pixmap {
+      scratch.svg_backdrop = Some(backdrop_pixmap);
+    }
     BACKDROP_FILTER_SCRATCH.with(|cell| {
       *cell.borrow_mut() = scratch;
     });
@@ -960,6 +1035,9 @@ fn apply_filters_scoped(
   })();
   if let Err(err) = copy_out {
     scratch.region = Some(region);
+    if let Some(backdrop_pixmap) = svg_backdrop_pixmap {
+      scratch.svg_backdrop = Some(backdrop_pixmap);
+    }
     BACKDROP_FILTER_SCRATCH.with(|cell| {
       *cell.borrow_mut() = scratch;
     });
@@ -967,9 +1045,123 @@ fn apply_filters_scoped(
   }
 
   scratch.region = Some(region);
+  if let Some(backdrop_pixmap) = svg_backdrop_pixmap {
+    scratch.svg_backdrop = Some(backdrop_pixmap);
+  }
   BACKDROP_FILTER_SCRATCH.with(|cell| {
     *cell.borrow_mut() = scratch;
   });
+  Ok(())
+}
+
+fn apply_filters_with_optional_svg_backdrop(
+  pixmap: &mut Pixmap,
+  filters: &[ResolvedFilter],
+  scale: f32,
+  bbox: Rect,
+  cache: Option<&mut (dyn BlurCacheOps + 'static)>,
+  backdrop: Option<&Pixmap>,
+  backdrop_origin: (i32, i32),
+) -> RenderResult<()> {
+  let Some(backdrop) = backdrop else {
+    return apply_filters(
+      pixmap,
+      filters,
+      scale,
+      bbox,
+      crate::paint::svg_filter::SvgFilterStandardInputs::default(),
+      cache,
+    );
+  };
+
+  let mut scratch = BACKDROP_FILTER_SCRATCH.with(|cell| std::mem::take(&mut *cell.borrow_mut()));
+  let mut backdrop_pixmap = match scratch.svg_backdrop.take() {
+    Some(existing) if existing.width() == pixmap.width() && existing.height() == pixmap.height() => {
+      existing
+    }
+    _ => match new_pixmap(pixmap.width(), pixmap.height()) {
+      Some(p) => p,
+      None => {
+        BACKDROP_FILTER_SCRATCH.with(|cell| {
+          *cell.borrow_mut() = scratch;
+        });
+        return apply_filters(
+          pixmap,
+          filters,
+          scale,
+          bbox,
+          crate::paint::svg_filter::SvgFilterStandardInputs::default(),
+          cache,
+        );
+      }
+    },
+  };
+
+  backdrop_pixmap.data_mut().fill(0);
+  let result = copy_pixmap_region_with_offset(
+    &mut backdrop_pixmap,
+    backdrop,
+    backdrop_origin.0,
+    backdrop_origin.1,
+  )
+  .and_then(|()| {
+    let svg_inputs = crate::paint::svg_filter::SvgFilterStandardInputs {
+      background_image: Some(&backdrop_pixmap),
+      ..Default::default()
+    };
+    apply_filters(pixmap, filters, scale, bbox, svg_inputs, cache)
+  });
+
+  scratch.svg_backdrop = Some(backdrop_pixmap);
+  BACKDROP_FILTER_SCRATCH.with(|cell| {
+    *cell.borrow_mut() = scratch;
+  });
+  result
+}
+
+fn copy_pixmap_region_with_offset(
+  dst: &mut Pixmap,
+  src: &Pixmap,
+  src_x: i32,
+  src_y: i32,
+) -> RenderResult<()> {
+  let dst_w = dst.width() as i32;
+  let dst_h = dst.height() as i32;
+  if dst_w <= 0 || dst_h <= 0 {
+    return Ok(());
+  }
+  let src_w = src.width() as i32;
+  let src_h = src.height() as i32;
+  if src_w <= 0 || src_h <= 0 {
+    return Ok(());
+  }
+
+  let x0 = src_x.max(0);
+  let y0 = src_y.max(0);
+  let x1 = (src_x + dst_w).min(src_w);
+  let y1 = (src_y + dst_h).min(src_h);
+  if x0 >= x1 || y0 >= y1 {
+    return Ok(());
+  }
+
+  let dst_off_x = (x0 - src_x) as usize;
+  let dst_off_y = (y0 - src_y) as usize;
+  let copy_w = (x1 - x0) as usize;
+  let copy_h = (y1 - y0) as usize;
+
+  let src_stride = src.width() as usize * 4;
+  let dst_stride = dst.width() as usize * 4;
+  let row_bytes = copy_w * 4;
+  let src_data = src.data();
+  let dst_data = dst.data_mut();
+
+  let mut deadline_counter = 0usize;
+  for row in 0..copy_h {
+    check_active_periodic(&mut deadline_counter, 32, RenderStage::Paint)?;
+    let src_idx = (y0 as usize + row) * src_stride + x0 as usize * 4;
+    let dst_idx = (dst_off_y + row) * dst_stride + dst_off_x * 4;
+    dst_data[dst_idx..dst_idx + row_bytes].copy_from_slice(&src_data[src_idx..src_idx + row_bytes]);
+  }
   Ok(())
 }
 fn apply_backdrop_filters(
@@ -1057,7 +1249,14 @@ fn apply_backdrop_filters(
     bounds.width(),
     bounds.height(),
   );
-  if let Err(err) = apply_filters(&mut region, filters, scale, local_bbox, cache) {
+  if let Err(err) = apply_filters(
+    &mut region,
+    filters,
+    scale,
+    local_bbox,
+    crate::paint::svg_filter::SvgFilterStandardInputs::default(),
+    cache,
+  ) {
     scratch.region = Some(region);
     BACKDROP_FILTER_SCRATCH.with(|cell| {
       *cell.borrow_mut() = scratch;
@@ -1300,6 +1499,7 @@ thread_local! {
 struct BackdropFilterScratch {
   region: Option<Pixmap>,
   radii_mask: Option<Mask>,
+  svg_backdrop: Option<Pixmap>,
 }
 
 thread_local! {
@@ -6965,13 +7165,25 @@ impl DisplayListRenderer {
               record.mask_bounds.width(),
               record.mask_bounds.height(),
             );
+            let needs_svg_background = record.filters.iter().any(|filter| match filter {
+              ResolvedFilter::SvgFilter(filter) => filter.uses_background_inputs(),
+              _ => false,
+            });
+            let backdrop = needs_svg_background.then(|| self.canvas.pixmap());
+            let blur_cache: &mut (dyn BlurCacheOps + 'static) = match self.shared_blur_cache.as_mut()
+            {
+              Some(shared) => shared,
+              None => &mut self.blur_cache,
+            };
             apply_filters_scoped(
               &mut layer,
               &record.filters,
               self.scale,
               bbox,
               layer_region.as_ref(),
-              Some(self.blur_cache_mut()),
+              Some(blur_cache),
+              backdrop,
+              origin,
             )?;
           }
 
@@ -11033,11 +11245,29 @@ mod tests {
     let bounds = Rect::from_xywh(1.0, 1.0, 6.0, 6.0);
     let filters = vec![ResolvedFilter::Brightness(1.25)];
 
-    apply_filters_scoped(&mut pixmap, &filters, 1.0, bounds, Some(&bounds), None)
+    apply_filters_scoped(
+      &mut pixmap,
+      &filters,
+      1.0,
+      bounds,
+      Some(&bounds),
+      None,
+      None,
+      (0, 0),
+    )
       .expect("apply filter warm-up");
 
     let recorder = crate::paint::pixmap::NewPixmapAllocRecorder::start();
-    apply_filters_scoped(&mut pixmap, &filters, 1.0, bounds, Some(&bounds), None)
+    apply_filters_scoped(
+      &mut pixmap,
+      &filters,
+      1.0,
+      bounds,
+      Some(&bounds),
+      None,
+      None,
+      (0, 0),
+    )
       .expect("apply filter reuse");
     let allocations = recorder.take();
 

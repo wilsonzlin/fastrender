@@ -66,6 +66,7 @@ mod individual_transform_properties_test;
 mod svg_context_paint_font;
 mod svg_filter_color_interpolation;
 mod svg_filter_color_interpolation_golden;
+mod svg_filter_background_image;
 mod svg_filter_display_none_defs_test;
 mod svg_filter_gaussian_blur;
 mod svg_filter_layer_bounds;

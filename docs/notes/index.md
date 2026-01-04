@@ -16,3 +16,4 @@ Small, durable writeups that explain “why/how” decisions that are worth keep
 - [svg_filters_percentages.md](svg_filters_percentages.md) — SVG filter region/primitive percentage resolution rules.
 - [svg_filters_color_interpolation_filters.md](svg_filters_color_interpolation_filters.md) — SVG filter color spaces (`color-interpolation-filters`) and premultiplication policy.
 - [svg_filter_filterres.md](svg_filter_filterres.md) — `filterRes` mapping semantics when filter regions are offset/clipped.
+- [svg_filters_standard_inputs.md](svg_filters_standard_inputs.md) — support status for SVG filter standard inputs like `BackgroundImage`.

@@ -191,6 +191,9 @@ fn filter_result_cache_len() -> usize {
 struct SvgFilterCacheKey {
   filter_hash: u64,
   source_hash: u64,
+  backdrop_hash: u64,
+  fill_paint: u32,
+  stroke_paint: u32,
   scale_x_bits: u32,
   scale_y_bits: u32,
   width: u32,
@@ -282,6 +285,9 @@ impl SvgFilterCacheKey {
   fn new(
     filter: &SvgFilter,
     pixmap: &Pixmap,
+    backdrop: Option<&Pixmap>,
+    fill_paint: Option<u32>,
+    stroke_paint: Option<u32>,
     scale_x: f32,
     scale_y: f32,
     bbox: Rect,
@@ -298,6 +304,11 @@ impl SvgFilterCacheKey {
     Some(Self {
       filter_hash: filter.fingerprint,
       source_hash: pixel_fingerprint_in_region(pixmap, filter_region),
+      backdrop_hash: backdrop
+        .map(|pixmap| pixel_fingerprint_in_region(pixmap, filter_region))
+        .unwrap_or(0),
+      fill_paint: fill_paint.unwrap_or(0),
+      stroke_paint: stroke_paint.unwrap_or(0),
       scale_x_bits: scale_x.to_bits(),
       scale_y_bits: scale_y.to_bits(),
       width: pixmap.width(),
@@ -809,6 +820,21 @@ pub enum FilterInput {
   Previous,
 }
 
+/// Optional sources for SVG filter standard inputs that depend on the rendering context.
+///
+/// FastRender's SVG filter executor can only provide `SourceGraphic`/`SourceAlpha` on its own.
+/// Inputs like `BackgroundImage` / `BackgroundAlpha` require the caller to snapshot the already-
+/// composited backdrop behind the filtered element and pass it in here.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct SvgFilterStandardInputs<'a> {
+  /// Backdrop pixels for the filter region (aka `BackgroundImage`).
+  pub(crate) background_image: Option<&'a Pixmap>,
+  /// Computed `fill` paint for the filtered SVG graphics element, when known.
+  pub(crate) fill_paint: Option<Rgba>,
+  /// Computed `stroke` paint for the filtered SVG graphics element, when known.
+  pub(crate) stroke_paint: Option<Rgba>,
+}
+
 #[derive(Clone, Copy, Debug)]
 enum SvgCoordinateUnits {
   ObjectBoundingBox,
@@ -962,7 +988,6 @@ fn transparent_result(source: &FilterResult) -> Option<FilterResult> {
     region: Rect::ZERO,
   })
 }
-
 #[derive(Clone, Copy, Debug)]
 pub enum ChannelSelector {
   R,
@@ -1911,6 +1936,26 @@ impl SvgFilter {
     self.region.resolve(bbox)
   }
 
+  pub(crate) fn uses_background_inputs(&self) -> bool {
+    self.steps.iter().any(|step| {
+      primitive_uses_input(&step.primitive, |input| {
+        matches!(input, FilterInput::BackgroundImage | FilterInput::BackgroundAlpha)
+      })
+    })
+  }
+
+  pub(crate) fn uses_fill_paint_input(&self) -> bool {
+    self.steps.iter().any(|step| {
+      primitive_uses_input(&step.primitive, |input| matches!(input, FilterInput::FillPaint))
+    })
+  }
+
+  pub(crate) fn uses_stroke_paint_input(&self) -> bool {
+    self.steps.iter().any(|step| {
+      primitive_uses_input(&step.primitive, |input| matches!(input, FilterInput::StrokePaint))
+    })
+  }
+
   pub fn refresh_fingerprint(&mut self) {
     self.fingerprint = svg_filter_fingerprint(self);
   }
@@ -1979,6 +2024,57 @@ impl SvgFilter {
     };
     let reference = (bbox.width().abs() + bbox.height().abs()) * 0.5;
     value.resolve(units, reference)
+  }
+}
+
+fn primitive_uses_input<F>(primitive: &FilterPrimitive, mut predicate: F) -> bool
+where
+  F: FnMut(&FilterInput) -> bool,
+{
+  let mut found = false;
+  primitive_visit_inputs(primitive, |input| {
+    if !found && predicate(input) {
+      found = true;
+    }
+  });
+  found
+}
+
+fn primitive_visit_inputs<F>(primitive: &FilterPrimitive, mut visit: F)
+where
+  F: FnMut(&FilterInput),
+{
+  match primitive {
+    FilterPrimitive::Flood { .. } => {}
+    FilterPrimitive::GaussianBlur { input, .. } => visit(input),
+    FilterPrimitive::Offset { input, .. } => visit(input),
+    FilterPrimitive::ColorMatrix { input, .. } => visit(input),
+    FilterPrimitive::Composite {
+      input1, input2, ..
+    } => {
+      visit(input1);
+      visit(input2);
+    }
+    FilterPrimitive::Merge { inputs } => inputs.iter().for_each(visit),
+    FilterPrimitive::DropShadow { input, .. } => visit(input),
+    FilterPrimitive::Blend {
+      input1, input2, ..
+    } => {
+      visit(input1);
+      visit(input2);
+    }
+    FilterPrimitive::Morphology { input, .. } => visit(input),
+    FilterPrimitive::ComponentTransfer { input, .. } => visit(input),
+    FilterPrimitive::DiffuseLighting { input, .. } => visit(input),
+    FilterPrimitive::SpecularLighting { input, .. } => visit(input),
+    FilterPrimitive::Image(_) => {}
+    FilterPrimitive::Tile { input } => visit(input),
+    FilterPrimitive::Turbulence { .. } => {}
+    FilterPrimitive::DisplacementMap { in1, in2, .. } => {
+      visit(in1);
+      visit(in2);
+    }
+    FilterPrimitive::ConvolveMatrix { input, .. } => visit(input),
   }
 }
 
@@ -2752,7 +2848,14 @@ pub fn apply_svg_filter(
   scale: f32,
   bbox: Rect,
 ) -> RenderResult<()> {
-  apply_svg_filter_with_cache(def, pixmap, scale, bbox, None)
+  apply_svg_filter_with_cache(
+    def,
+    pixmap,
+    scale,
+    bbox,
+    SvgFilterStandardInputs::default(),
+    None,
+  )
 }
 
 pub(crate) fn apply_svg_filter_with_cache(
@@ -2760,6 +2863,7 @@ pub(crate) fn apply_svg_filter_with_cache(
   pixmap: &mut Pixmap,
   scale: f32,
   bbox: Rect,
+  inputs: SvgFilterStandardInputs,
   mut blur_cache: Option<&mut (dyn BlurCacheOps + 'static)>,
 ) -> RenderResult<()> {
   let Some(_depth) = svg_filter_depth_guard() else {
@@ -2780,20 +2884,44 @@ pub(crate) fn apply_svg_filter_with_cache(
   };
 
   let Some((res_w, res_h)) = def.filter_res else {
-    apply_svg_filter_scaled(def, pixmap, scale, scale, bbox, blur_cache.as_deref_mut())?;
+    apply_svg_filter_scaled(
+      def,
+      pixmap,
+      scale,
+      scale,
+      bbox,
+      inputs,
+      blur_cache.as_deref_mut(),
+    )?;
     return Ok(());
   };
 
   let target_w = pixmap.width();
   let target_h = pixmap.height();
   if target_w == 0 || target_h == 0 || res_w == 0 || res_h == 0 {
-    apply_svg_filter_scaled(def, pixmap, scale, scale, bbox, blur_cache.as_deref_mut())?;
+    apply_svg_filter_scaled(
+      def,
+      pixmap,
+      scale,
+      scale,
+      bbox,
+      inputs,
+      blur_cache.as_deref_mut(),
+    )?;
     return Ok(());
   }
   let filter_region_is_pixmap_bounds =
     rect_matches_pixmap_bounds(filter_region, target_w, target_h);
   if filter_region_is_pixmap_bounds && res_w == target_w && res_h == target_h {
-    apply_svg_filter_scaled(def, pixmap, scale, scale, bbox, blur_cache.as_deref_mut())?;
+    apply_svg_filter_scaled(
+      def,
+      pixmap,
+      scale,
+      scale,
+      bbox,
+      inputs,
+      blur_cache.as_deref_mut(),
+    )?;
     return Ok(());
   }
 
@@ -2806,7 +2934,15 @@ pub(crate) fn apply_svg_filter_with_cache(
     || !filter_region.x().is_finite()
     || !filter_region.y().is_finite()
   {
-    apply_svg_filter_scaled(def, pixmap, scale, scale, bbox, blur_cache.as_deref_mut())?;
+    apply_svg_filter_scaled(
+      def,
+      pixmap,
+      scale,
+      scale,
+      bbox,
+      inputs,
+      blur_cache.as_deref_mut(),
+    )?;
     return Ok(());
   }
 
@@ -2817,7 +2953,15 @@ pub(crate) fn apply_svg_filter_with_cache(
     || scale_region_x <= 0.0
     || scale_region_y <= 0.0
   {
-    apply_svg_filter_scaled(def, pixmap, scale, scale, bbox, blur_cache.as_deref_mut())?;
+    apply_svg_filter_scaled(
+      def,
+      pixmap,
+      scale,
+      scale,
+      bbox,
+      inputs,
+      blur_cache.as_deref_mut(),
+    )?;
     return Ok(());
   }
 
@@ -2831,7 +2975,15 @@ pub(crate) fn apply_svg_filter_with_cache(
   let filter_res_matches_region =
     (scale_region_x - 1.0).abs() <= eps && (scale_region_y - 1.0).abs() <= eps;
   if region_origin_aligned && filter_res_matches_region {
-    apply_svg_filter_scaled(def, pixmap, scale, scale, bbox, blur_cache.as_deref_mut())?;
+    apply_svg_filter_scaled(
+      def,
+      pixmap,
+      scale,
+      scale,
+      bbox,
+      inputs,
+      blur_cache.as_deref_mut(),
+    )?;
     return Ok(());
   }
 
@@ -2853,7 +3005,15 @@ pub(crate) fn apply_svg_filter_with_cache(
       def.color_interpolation_filters,
     )?
   }) else {
-    apply_svg_filter_scaled(def, pixmap, scale, scale, bbox, blur_cache.as_deref_mut())?;
+    apply_svg_filter_scaled(
+      def,
+      pixmap,
+      scale,
+      scale,
+      bbox,
+      inputs,
+      blur_cache.as_deref_mut(),
+    )?;
     return Ok(());
   };
 
@@ -2870,17 +3030,56 @@ pub(crate) fn apply_svg_filter_with_cache(
   translate_filter_user_space_numbers_for_filter_res(&mut local_def, origin_css_x, origin_css_y);
   local_def.refresh_fingerprint();
 
+  let mut working_background: Option<Pixmap> = None;
+  if def.uses_background_inputs() {
+    let mut background_resized_to_target: Option<Pixmap> = None;
+    let background_for_sampling = match inputs.background_image {
+      Some(bg) if bg.width() == target_w && bg.height() == target_h => Some(bg),
+      Some(bg) => {
+        background_resized_to_target =
+          resize_pixmap(bg, target_w, target_h, def.color_interpolation_filters)?;
+        background_resized_to_target.as_ref()
+      }
+      None => None,
+    };
+
+    if let Some(bg) = background_for_sampling {
+      working_background = if filter_region_is_pixmap_bounds {
+        resize_pixmap(bg, res_w, res_h, def.color_interpolation_filters)?
+      } else {
+        let mut temp = bg.clone();
+        clip_to_region(&mut temp, filter_region)?;
+        resample_pixmap_region(&temp, filter_region, res_w, res_h, def.color_interpolation_filters)?
+      };
+    }
+  }
+
+  let working_inputs = SvgFilterStandardInputs {
+    background_image: working_background.as_ref(),
+    fill_paint: inputs.fill_paint,
+    stroke_paint: inputs.stroke_paint,
+  };
+
   apply_svg_filter_scaled(
     &local_def,
     &mut working_pixmap,
     scale * scale_region_x,
     scale * scale_region_y,
     bbox_working,
+    working_inputs,
     blur_cache.as_deref_mut(),
   )?;
 
   let Some(mut out_pixmap) = new_pixmap(target_w, target_h) else {
-    apply_svg_filter_scaled(def, pixmap, scale, scale, bbox, blur_cache.as_deref_mut())?;
+    apply_svg_filter_scaled(
+      def,
+      pixmap,
+      scale,
+      scale,
+      bbox,
+      inputs,
+      blur_cache.as_deref_mut(),
+    )?;
     return Ok(());
   };
 
@@ -3155,6 +3354,7 @@ fn apply_svg_filter_scaled(
   scale_x: f32,
   scale_y: f32,
   bbox: Rect,
+  inputs: SvgFilterStandardInputs,
   mut blur_cache: Option<&mut (dyn BlurCacheOps + 'static)>,
 ) -> RenderResult<()> {
   let Some((css_bbox, filter_region)) = resolve_filter_regions(def, scale_x, scale_y, bbox) else {
@@ -3169,8 +3369,53 @@ fn apply_svg_filter_scaled(
   let cacheable =
     cache_config.max_items > 0 && (cache_config.max_bytes == 0 || weight <= cache_config.max_bytes);
 
+  let uses_background = def.uses_background_inputs();
+  let uses_fill_paint = def.uses_fill_paint_input();
+  let uses_stroke_paint = def.uses_stroke_paint_input();
+
+  let mut resized_background: Option<Pixmap> = None;
+  let background_image = if uses_background {
+    match inputs.background_image {
+      Some(bg) if bg.width() == pixmap.width() && bg.height() == pixmap.height() => Some(bg),
+      Some(bg) => {
+        resized_background =
+          resize_pixmap(bg, pixmap.width(), pixmap.height(), def.color_interpolation_filters)?;
+        resized_background.as_ref()
+      }
+      None => None,
+    }
+  } else {
+    None
+  };
+
+  let paint_cache_key = |paint: Rgba| {
+    let premul = to_premultiplied(UnpremultipliedColor {
+      r: paint.r as f32 / 255.0,
+      g: paint.g as f32 / 255.0,
+      b: paint.b as f32 / 255.0,
+      a: paint.a,
+    });
+    u32::from_le_bytes([premul.red(), premul.green(), premul.blue(), premul.alpha()])
+  };
+  let fill_paint_key = (uses_fill_paint)
+    .then(|| inputs.fill_paint.map(paint_cache_key).unwrap_or(0))
+    .filter(|v| *v != 0);
+  let stroke_paint_key = (uses_stroke_paint)
+    .then(|| inputs.stroke_paint.map(paint_cache_key).unwrap_or(0))
+    .filter(|v| *v != 0);
+
   let cache_key = if cacheable {
-    SvgFilterCacheKey::new(def, pixmap, scale_x, scale_y, css_bbox, filter_region)
+    SvgFilterCacheKey::new(
+      def,
+      pixmap,
+      background_image,
+      fill_paint_key,
+      stroke_paint_key,
+      scale_x,
+      scale_y,
+      css_bbox,
+      filter_region,
+    )
   } else {
     None
   };
@@ -3186,6 +3431,26 @@ fn apply_svg_filter_scaled(
   clip_to_region(pixmap, filter_region)?;
 
   let css_filter_region = def.resolve_region(css_bbox);
+
+  let should_infer_paint =
+    (uses_fill_paint && inputs.fill_paint.is_none()) || (uses_stroke_paint && inputs.stroke_paint.is_none());
+  let inferred_paint = should_infer_paint.then(|| infer_solid_opaque_paint(pixmap)).flatten();
+  let fill_paint = if uses_fill_paint {
+    inputs.fill_paint.or(inferred_paint)
+  } else {
+    None
+  };
+  let stroke_paint = if uses_stroke_paint {
+    inputs.stroke_paint.or(inferred_paint)
+  } else {
+    None
+  };
+
+  let resolved_inputs = ResolvedStandardInputs {
+    background_image,
+    fill_paint,
+    stroke_paint,
+  };
 
   let source_region = clip_region(filter_region_for_pixmap(pixmap), filter_region);
   let source = FilterResult::new(pixmap.clone(), source_region, filter_region);
@@ -3265,6 +3530,7 @@ fn apply_svg_filter_scaled(
       &source,
       &results,
       &current,
+      &resolved_inputs,
       scale_x,
       scale_y,
       primitive_region,
@@ -3345,6 +3611,7 @@ fn apply_primitive(
   source: &FilterResult,
   results: &HashMap<String, FilterResult>,
   current: &FilterResult,
+  standard_inputs: &ResolvedStandardInputs,
   scale_x: f32,
   scale_y: f32,
   filter_region: Rect,
@@ -3366,7 +3633,9 @@ fn apply_primitive(
     )
     .map(|pixmap| FilterResult::full_region(pixmap, filter_region)),
     FilterPrimitive::GaussianBlur { input, std_dev } => {
-      let Some(mut img) = resolve_input(input, source, results, current, filter_region)? else {
+      let Some(mut img) =
+        resolve_input(input, source, results, current, standard_inputs, filter_region)?
+      else {
         return Ok(None);
       };
       let (sx, sy) = filter.resolve_primitive_pair(*std_dev, css_bbox);
@@ -3394,7 +3663,7 @@ fn apply_primitive(
     FilterPrimitive::Offset { input, dx, dy } => {
       let dx = filter.resolve_primitive_x(*dx, css_bbox) * scale_x;
       let dy = filter.resolve_primitive_y(*dy, css_bbox) * scale_y;
-      match resolve_input(input, source, results, current, filter_region)? {
+      match resolve_input(input, source, results, current, standard_inputs, filter_region)? {
         Some(img) => Some(offset_result(
           img,
           dx,
@@ -3406,7 +3675,9 @@ fn apply_primitive(
       }
     }
     FilterPrimitive::ColorMatrix { input, kind } => {
-      let Some(mut img) = resolve_input(input, source, results, current, filter_region)? else {
+      let Some(mut img) =
+        resolve_input(input, source, results, current, standard_inputs, filter_region)?
+      else {
         return Ok(None);
       };
       apply_color_matrix(&mut img.pixmap, kind, color_interpolation_filters)?;
@@ -3417,8 +3688,8 @@ fn apply_primitive(
       input2,
       operator,
     } => composite_pixmaps(
-      resolve_input(input1, source, results, current, filter_region)?,
-      resolve_input(input2, source, results, current, filter_region)?,
+      resolve_input(input1, source, results, current, standard_inputs, filter_region)?,
+      resolve_input(input2, source, results, current, standard_inputs, filter_region)?,
       *operator,
       color_interpolation_filters,
       filter_region,
@@ -3428,6 +3699,7 @@ fn apply_primitive(
       source,
       results,
       current,
+      standard_inputs,
       color_interpolation_filters,
       filter_region,
     )?),
@@ -3439,7 +3711,9 @@ fn apply_primitive(
       color,
       opacity,
     } => {
-      let Some(img) = resolve_input(input, source, results, current, filter_region)? else {
+      let Some(img) =
+        resolve_input(input, source, results, current, standard_inputs, filter_region)?
+      else {
         return Ok(None);
       };
       let dx = filter.resolve_primitive_x(*dx, css_bbox) * scale_x;
@@ -3464,14 +3738,16 @@ fn apply_primitive(
       input2,
       mode,
     } => blend_pixmaps(
-      resolve_input(input1, source, results, current, filter_region)?,
-      resolve_input(input2, source, results, current, filter_region)?,
+      resolve_input(input1, source, results, current, standard_inputs, filter_region)?,
+      resolve_input(input2, source, results, current, standard_inputs, filter_region)?,
       *mode,
       filter_region,
       color_interpolation_filters,
     )?,
     FilterPrimitive::Morphology { input, radius, op } => {
-      let Some(mut img) = resolve_input(input, source, results, current, filter_region)? else {
+      let Some(mut img) =
+        resolve_input(input, source, results, current, standard_inputs, filter_region)?
+      else {
         return Ok(None);
       };
       let radius = filter.resolve_primitive_pair(*radius, css_bbox);
@@ -3486,7 +3762,9 @@ fn apply_primitive(
       Some(img)
     }
     FilterPrimitive::ComponentTransfer { input, r, g, b, a } => {
-      let Some(mut img) = resolve_input(input, source, results, current, filter_region)? else {
+      let Some(mut img) =
+        resolve_input(input, source, results, current, standard_inputs, filter_region)?
+      else {
         return Ok(None);
       };
       apply_component_transfer(&mut img.pixmap, r, g, b, a, color_interpolation_filters)?;
@@ -3500,7 +3778,9 @@ fn apply_primitive(
       light,
       lighting_color,
     } => {
-      let Some(img) = resolve_input(input, source, results, current, filter_region)? else {
+      let Some(img) =
+        resolve_input(input, source, results, current, standard_inputs, filter_region)?
+      else {
         return Ok(None);
       };
       apply_diffuse_lighting(
@@ -3527,7 +3807,9 @@ fn apply_primitive(
       light,
       lighting_color,
     } => {
-      let Some(img) = resolve_input(input, source, results, current, filter_region)? else {
+      let Some(img) =
+        resolve_input(input, source, results, current, standard_inputs, filter_region)?
+      else {
         return Ok(None);
       };
       apply_specular_lighting(
@@ -3556,7 +3838,9 @@ fn apply_primitive(
       filter_region,
     ),
     FilterPrimitive::Tile { input } => {
-      let Some(img) = resolve_input(input, source, results, current, filter_region)? else {
+      let Some(img) =
+        resolve_input(input, source, results, current, standard_inputs, filter_region)?
+      else {
         return Ok(None);
       };
       tile_pixmap(img, filter_region)?
@@ -3591,10 +3875,14 @@ fn apply_primitive(
       x_channel,
       y_channel,
     } => {
-      let Some(primary) = resolve_input(in1, source, results, current, filter_region)? else {
+      let Some(primary) =
+        resolve_input(in1, source, results, current, standard_inputs, filter_region)?
+      else {
         return Ok(None);
       };
-      let Some(map) = resolve_input(in2, source, results, current, filter_region)? else {
+      let Some(map) =
+        resolve_input(in2, source, results, current, standard_inputs, filter_region)?
+      else {
         return Ok(None);
       };
       let scale = filter.resolve_primitive_scalar(*disp_scale, css_bbox) * scale_avg;
@@ -3625,7 +3913,9 @@ fn apply_primitive(
       preserve_alpha,
       subregion,
     } => {
-      let Some(img) = resolve_input(input, source, results, current, filter_region)? else {
+      let Some(img) =
+        resolve_input(input, source, results, current, standard_inputs, filter_region)?
+      else {
         return Ok(None);
       };
       let region = img.region;
@@ -3654,7 +3944,8 @@ fn resolve_input(
   source: &FilterResult,
   results: &HashMap<String, FilterResult>,
   current: &FilterResult,
-  _filter_region: Rect,
+  standard_inputs: &ResolvedStandardInputs,
+  filter_region: Rect,
 ) -> RenderResult<Option<FilterResult>> {
   let result = match input {
     FilterInput::SourceGraphic => Some(source.clone()),
@@ -3682,8 +3973,52 @@ fn resolve_input(
         region: source.region,
       })
     }
-    FilterInput::BackgroundImage | FilterInput::BackgroundAlpha => transparent_result(source),
-    FilterInput::FillPaint | FilterInput::StrokePaint => transparent_result(source),
+    FilterInput::BackgroundImage => standard_inputs
+      .background_image
+      .filter(|bg| bg.width() == source.pixmap.width() && bg.height() == source.pixmap.height())
+      .map(|bg| FilterResult::new(bg.clone(), filter_region_for_pixmap(bg), filter_region))
+      .or_else(|| transparent_result(source)),
+    FilterInput::BackgroundAlpha => match standard_inputs
+      .background_image
+      .filter(|bg| bg.width() == source.pixmap.width() && bg.height() == source.pixmap.height())
+    {
+      Some(bg) => {
+        check_active(RenderStage::Paint)?;
+        let mut mask = match new_pixmap(bg.width(), bg.height()) {
+          Some(p) => p,
+          None => return Ok(None),
+        };
+        for (idx, (dst, src)) in mask
+          .pixels_mut()
+          .iter_mut()
+          .zip(bg.pixels().iter())
+          .enumerate()
+        {
+          if idx % FILTER_DEADLINE_STRIDE == 0 {
+            check_active(RenderStage::Paint)?;
+          }
+          let alpha = src.alpha();
+          *dst = PremultipliedColorU8::from_rgba(0, 0, 0, alpha)
+            .unwrap_or(PremultipliedColorU8::TRANSPARENT);
+        }
+        Some(FilterResult::new(
+          mask,
+          filter_region_for_pixmap(bg),
+          filter_region,
+        ))
+      }
+      None => transparent_result(source),
+    },
+    FilterInput::FillPaint => standard_inputs
+      .fill_paint
+      .and_then(|paint| flood(source.pixmap.width(), source.pixmap.height(), &paint, 1.0))
+      .map(|pixmap| FilterResult::new(pixmap, filter_region_for_pixmap(&source.pixmap), filter_region))
+      .or_else(|| transparent_result(source)),
+    FilterInput::StrokePaint => standard_inputs
+      .stroke_paint
+      .and_then(|paint| flood(source.pixmap.width(), source.pixmap.height(), &paint, 1.0))
+      .map(|pixmap| FilterResult::new(pixmap, filter_region_for_pixmap(&source.pixmap), filter_region))
+      .or_else(|| transparent_result(source)),
     FilterInput::Reference(name) => results
       .get(name)
       .cloned()
@@ -3691,6 +4026,38 @@ fn resolve_input(
     FilterInput::Previous => Some(current.clone()),
   };
   Ok(result)
+}
+
+#[derive(Clone, Copy, Debug)]
+struct ResolvedStandardInputs<'a> {
+  background_image: Option<&'a Pixmap>,
+  fill_paint: Option<Rgba>,
+  stroke_paint: Option<Rgba>,
+}
+
+fn infer_solid_opaque_paint(pixmap: &Pixmap) -> Option<Rgba> {
+  let mut base: Option<(u8, u8, u8)> = None;
+  for px in pixmap.pixels().iter() {
+    if px.alpha() != 255 {
+      continue;
+    }
+    base = Some((px.red(), px.green(), px.blue()));
+    break;
+  }
+  let (r, g, b) = base?;
+
+  // Only accept a paint when all non-transparent pixels share the same unpremultiplied RGB.
+  for px in pixmap.pixels().iter() {
+    let a = px.alpha();
+    if a == 0 {
+      continue;
+    }
+    let unpremul = |c: u8| -> u8 { ((c as u16 * 255 + (a as u16 / 2)) / a as u16) as u8 };
+    if unpremul(px.red()) != r || unpremul(px.green()) != g || unpremul(px.blue()) != b {
+      return None;
+    }
+  }
+  Some(Rgba::new(r, g, b, 1.0))
 }
 
 fn render_fe_image(
@@ -4436,6 +4803,7 @@ fn merge_inputs(
   source: &FilterResult,
   results: &HashMap<String, FilterResult>,
   current: &FilterResult,
+  standard_inputs: &ResolvedStandardInputs,
   color_interpolation_filters: ColorInterpolationFilters,
   filter_region: Rect,
 ) -> RenderResult<FilterResult> {
@@ -4449,7 +4817,7 @@ fn merge_inputs(
   paint.blend_mode = tiny_skia::BlendMode::SourceOver;
 
   for input in inputs {
-    if let Some(img) = resolve_input(input, source, results, current, filter_region)? {
+    if let Some(img) = resolve_input(input, source, results, current, standard_inputs, filter_region)? {
       match color_interpolation_filters {
         ColorInterpolationFilters::SRGB => {
           out.draw_pixmap(
@@ -5662,7 +6030,14 @@ mod tests {
 
     let bbox = Rect::from_xywh(0.0, 0.0, 2.0, 2.0);
     let alloc_recorder = crate::paint::pixmap::NewPixmapAllocRecorder::start();
-    let result = apply_svg_filter_with_cache(&filter, &mut pixmap, 1.0, bbox, None);
+    let result = apply_svg_filter_with_cache(
+      &filter,
+      &mut pixmap,
+      1.0,
+      bbox,
+      SvgFilterStandardInputs::default(),
+      None,
+    );
     assert!(
       matches!(result, Ok(())),
       "expected recursion limit to noop, got {result:?}"
@@ -5687,6 +6062,11 @@ mod tests {
   ) -> RenderResult<Option<FilterResult>> {
     let region = filter_region_for_pixmap(pixmap);
     let src = FilterResult::full_region(pixmap.clone(), region);
+    let standard_inputs = ResolvedStandardInputs {
+      background_image: None,
+      fill_paint: None,
+      stroke_paint: None,
+    };
     let mut filter = SvgFilter {
       color_interpolation_filters: ColorInterpolationFilters::LinearRGB,
       steps: Vec::new(),
@@ -5703,6 +6083,7 @@ mod tests {
       &src,
       &HashMap::new(),
       &src,
+      &standard_inputs,
       1.0,
       1.0,
       region,
@@ -5734,6 +6115,11 @@ mod tests {
     };
     filter.refresh_fingerprint();
     let results = HashMap::new();
+    let standard_inputs = ResolvedStandardInputs {
+      background_image: None,
+      fill_paint: None,
+      stroke_paint: None,
+    };
     apply_primitive(
       &filter,
       &region,
@@ -5741,6 +6127,7 @@ mod tests {
       &src,
       &results,
       &src,
+      &standard_inputs,
       1.0,
       1.0,
       region,
@@ -5758,11 +6145,17 @@ mod tests {
 
     let region = filter_region_for_pixmap(&pixmap);
     let src = FilterResult::full_region(pixmap, region);
+    let standard_inputs = ResolvedStandardInputs {
+      background_image: None,
+      fill_paint: None,
+      stroke_paint: None,
+    };
     let resolved = resolve_input(
       &FilterInput::SourceAlpha,
       &src,
       &HashMap::new(),
       &src,
+      &standard_inputs,
       region,
     )
     .unwrap()
@@ -5843,6 +6236,77 @@ mod tests {
     apply_svg_filter(filter.as_ref(), &mut pixmap, 1.0, bbox).unwrap();
 
     assert_ne!(pixels_to_vec(&pixmap), before);
+  }
+
+  #[test]
+  fn resolve_input_background_image_uses_provided_backdrop() {
+    let filter_region = Rect::from_xywh(0.0, 0.0, 2.0, 1.0);
+    let source_pixmap = new_pixmap(2, 1).unwrap();
+    let source = FilterResult::new(source_pixmap, filter_region, filter_region);
+    let current = source.clone();
+
+    let mut backdrop = new_pixmap(2, 1).unwrap();
+    backdrop.pixels_mut()[0] = ColorU8::from_rgba(10, 20, 30, 255).premultiply();
+    backdrop.pixels_mut()[1] = ColorU8::from_rgba(40, 50, 60, 255).premultiply();
+
+    let standard_inputs = ResolvedStandardInputs {
+      background_image: Some(&backdrop),
+      fill_paint: None,
+      stroke_paint: None,
+    };
+
+    let resolved = resolve_input(
+      &FilterInput::BackgroundImage,
+      &source,
+      &HashMap::new(),
+      &current,
+      &standard_inputs,
+      filter_region,
+    )
+    .unwrap()
+    .expect("resolved BackgroundImage");
+
+    assert_eq!(pixels_to_vec(&resolved.pixmap), pixels_to_vec(&backdrop));
+  }
+
+  #[test]
+  fn resolve_input_background_alpha_uses_backdrop_alpha_only() {
+    let filter_region = Rect::from_xywh(0.0, 0.0, 2.0, 1.0);
+    let source_pixmap = new_pixmap(2, 1).unwrap();
+    let source = FilterResult::new(source_pixmap, filter_region, filter_region);
+    let current = source.clone();
+
+    let mut backdrop = new_pixmap(2, 1).unwrap();
+    backdrop.pixels_mut()[0] = ColorU8::from_rgba(10, 20, 30, 0).premultiply();
+    backdrop.pixels_mut()[1] = ColorU8::from_rgba(10, 20, 30, 128).premultiply();
+
+    let standard_inputs = ResolvedStandardInputs {
+      background_image: Some(&backdrop),
+      fill_paint: None,
+      stroke_paint: None,
+    };
+
+    let resolved = resolve_input(
+      &FilterInput::BackgroundAlpha,
+      &source,
+      &HashMap::new(),
+      &current,
+      &standard_inputs,
+      filter_region,
+    )
+    .unwrap()
+    .expect("resolved BackgroundAlpha");
+
+    let px0 = resolved.pixmap.pixel(0, 0).expect("pixel 0");
+    let px1 = resolved.pixmap.pixel(1, 0).expect("pixel 1");
+    assert_eq!(
+      (px0.red(), px0.green(), px0.blue(), px0.alpha()),
+      (0, 0, 0, 0)
+    );
+    assert_eq!(
+      (px1.red(), px1.green(), px1.blue(), px1.alpha()),
+      (0, 0, 0, 128)
+    );
   }
 
   fn deadline_after_first_check() -> (RenderDeadline, Arc<AtomicUsize>) {
@@ -6084,6 +6548,11 @@ mod tests {
     pixmap.pixels_mut()[0] = ColorU8::from_rgba(200, 100, 50, 128).premultiply();
     let region = filter_region_for_pixmap(&pixmap);
     let src = FilterResult::full_region(pixmap, region);
+    let standard_inputs = ResolvedStandardInputs {
+      background_image: None,
+      fill_paint: None,
+      stroke_paint: None,
+    };
 
     let result = with_deadline(Some(&deadline), || {
       resolve_input(
@@ -6091,6 +6560,7 @@ mod tests {
         &src,
         &HashMap::new(),
         &src,
+        &standard_inputs,
         region,
       )
     });
@@ -7634,8 +8104,24 @@ mod tests_composite {
 
     let mut cache = BlurCache::default();
     let bbox = Rect::from_xywh(0.0, 0.0, 32.0, 32.0);
-    apply_svg_filter_with_cache(&filter, &mut pixmap, 1.0, bbox, Some(&mut cache)).unwrap();
-    apply_svg_filter_with_cache(&filter, &mut pixmap, 1.0, bbox, Some(&mut cache)).unwrap();
+    apply_svg_filter_with_cache(
+      &filter,
+      &mut pixmap,
+      1.0,
+      bbox,
+      SvgFilterStandardInputs::default(),
+      Some(&mut cache),
+    )
+    .unwrap();
+    apply_svg_filter_with_cache(
+      &filter,
+      &mut pixmap,
+      1.0,
+      bbox,
+      SvgFilterStandardInputs::default(),
+      Some(&mut cache),
+    )
+    .unwrap();
 
     let stats = take_paint_diagnostics().expect("diagnostics enabled");
     assert!(
@@ -8402,12 +8888,18 @@ mod color_interpolation_filters_compositing_tests {
       FilterInput::Reference("bottom".to_string()),
       FilterInput::Reference("top".to_string()),
     ];
+    let standard_inputs = ResolvedStandardInputs {
+      background_image: None,
+      fill_paint: None,
+      stroke_paint: None,
+    };
 
     let srgb = merge_inputs(
       &inputs,
       &source,
       &results,
       &current,
+      &standard_inputs,
       ColorInterpolationFilters::SRGB,
       filter_region,
     )
@@ -8419,6 +8911,7 @@ mod color_interpolation_filters_compositing_tests {
       &source,
       &results,
       &current,
+      &standard_inputs,
       ColorInterpolationFilters::LinearRGB,
       filter_region,
     )
