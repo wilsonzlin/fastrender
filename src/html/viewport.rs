@@ -234,13 +234,9 @@ fn parse_viewport_length(value: &str, axis: ViewportAxis) -> Option<ViewportLeng
   }
 
   let trimmed = value.trim();
-  let numeric = if trimmed.len() >= 2 {
-    let (number, unit) = trimmed.split_at(trimmed.len() - 2);
-    if unit.eq_ignore_ascii_case("px") {
-      number
-    } else {
-      trimmed
-    }
+  let bytes = trimmed.as_bytes();
+  let numeric = if bytes.len() >= 2 && bytes[bytes.len() - 2..].eq_ignore_ascii_case(b"px") {
+    trimmed.get(..bytes.len() - 2).unwrap_or("")
   } else {
     trimmed
   };
@@ -319,6 +315,11 @@ mod tests {
   fn parses_lengths_with_px_suffix() {
     let parsed = parse_meta_viewport_content("width=320px").unwrap();
     assert_eq!(parsed.width, Some(ViewportLength::Absolute(320.0)));
+  }
+
+  #[test]
+  fn parse_meta_viewport_content_does_not_panic_on_unicode_value() {
+    assert!(parse_meta_viewport_content("width=€").is_none());
   }
 
   #[test]
