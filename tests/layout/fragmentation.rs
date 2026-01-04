@@ -736,7 +736,9 @@ fn sticky_offsets_apply_to_additional_fragments() {
   let sticky = BoxNode::new_block(Arc::new(sticky_style), FormattingContextType::Block, vec![]);
 
   let mut tail_style = ComputedStyle::default();
-  tail_style.height = Some(Length::px(40.0));
+  // Keep trailing content within the same fragmentainer as the sticky element so sticky movement
+  // isn't clamped away by the fragment slice boundary.
+  tail_style.height = Some(Length::px(30.0));
   let tail = BoxNode::new_block(Arc::new(tail_style), FormattingContextType::Block, vec![]);
 
   let root = BoxNode::new_block(
@@ -771,14 +773,16 @@ fn sticky_offsets_apply_to_additional_fragments() {
 }
 
 fn sticky_abs_position<'a>(tree: &'a FragmentTree) -> Option<(Point, usize, &'a FragmentNode)> {
-  let mut roots = Vec::new();
-  roots.push((&tree.root, 0usize));
-  for (idx, root) in tree.additional_fragments.iter().enumerate() {
-    roots.push((root, idx + 1));
-  }
+  let roots = std::iter::once((&tree.root, 0usize)).chain(
+    tree
+      .additional_fragments
+      .iter()
+      .enumerate()
+      .map(|(idx, root)| (root, idx + 1)),
+  );
 
   for (root, idx) in roots {
-    if let Some((pos, node)) = find_sticky(root) {
+    if let Some((pos, node)) = find_sticky(root, Point::ZERO) {
       return Some((pos, idx, node));
     }
   }
@@ -786,20 +790,21 @@ fn sticky_abs_position<'a>(tree: &'a FragmentTree) -> Option<(Point, usize, &'a 
   None
 }
 
-fn find_sticky<'a>(node: &'a FragmentNode) -> Option<(Point, &'a FragmentNode)> {
+fn find_sticky<'a>(node: &'a FragmentNode, offset: Point) -> Option<(Point, &'a FragmentNode)> {
   let is_sticky = node
     .style
     .as_ref()
     .map(|s| s.position.is_sticky())
     .unwrap_or(false);
 
-  let abs_pos = Point::new(node.bounds.x(), node.bounds.y());
+  let abs_pos = Point::new(offset.x + node.bounds.x(), offset.y + node.bounds.y());
   if is_sticky {
     return Some((abs_pos, node));
   }
 
+  let child_offset = abs_pos;
   for child in node.children.iter() {
-    if let Some(found) = find_sticky(child) {
+    if let Some(found) = find_sticky(child, child_offset) {
       return Some(found);
     }
   }
