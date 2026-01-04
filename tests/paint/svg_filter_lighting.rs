@@ -2,7 +2,8 @@ use fastrender::geometry::Rect;
 use fastrender::image_loader::ImageCache;
 use fastrender::paint::svg_filter::{
   apply_svg_filter, parse_svg_filter_from_svg_document, ColorInterpolationFilters, FilterInput,
-  FilterPrimitive, FilterStep, LightSource, SvgFilter, SvgFilterRegion, SvgFilterUnits, SvgLength,
+  FilterPrimitive, FilterStep, LightSource, SvgFilter, SvgFilterPrimitiveRegionOverride,
+  SvgFilterRegion, SvgFilterUnits, SvgLength,
 };
 use fastrender::Rgba;
 use tiny_skia::{Pixmap, PremultipliedColorU8};
@@ -283,11 +284,11 @@ fn userspace_percent_regions_resolve_against_bbox() {
         color: Rgba::GREEN,
         opacity: 1.0,
       },
-      region: Some(SvgFilterRegion {
-        x: SvgLength::Percent(0.25),
-        y: SvgLength::Percent(0.25),
-        width: SvgLength::Percent(0.5),
-        height: SvgLength::Percent(0.5),
+      region: Some(SvgFilterPrimitiveRegionOverride {
+        x: Some(SvgLength::Percent(0.25)),
+        y: Some(SvgLength::Percent(0.25)),
+        width: Some(SvgLength::Percent(0.5)),
+        height: Some(SvgLength::Percent(0.5)),
         units: SvgFilterUnits::UserSpaceOnUse,
       }),
     }],

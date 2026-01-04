@@ -591,7 +591,7 @@ pub struct FilterStep {
   pub result: Option<String>,
   pub color_interpolation_filters: Option<ColorInterpolationFilters>,
   pub primitive: FilterPrimitive,
-  pub region: Option<SvgFilterRegion>,
+  pub region: Option<SvgFilterPrimitiveRegionOverride>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -612,6 +612,15 @@ pub struct SvgFilterRegion {
   pub y: SvgLength,
   pub width: SvgLength,
   pub height: SvgLength,
+  pub units: SvgFilterUnits,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct SvgFilterPrimitiveRegionOverride {
+  pub x: Option<SvgLength>,
+  pub y: Option<SvgLength>,
+  pub width: Option<SvgLength>,
+  pub height: Option<SvgLength>,
   pub units: SvgFilterUnits,
 }
 
@@ -839,6 +848,18 @@ impl SvgLength {
     raw.parse::<f32>().map(SvgLength::Number).unwrap_or(default)
   }
 
+  fn parse_optional(attr: Option<&str>) -> Option<SvgLength> {
+    let raw = attr?.trim();
+    if raw.is_empty() {
+      return None;
+    }
+    if let Some(stripped) = raw.strip_suffix('%') {
+      let value = stripped.trim().parse::<f32>().ok()?;
+      return Some(SvgLength::Percent(value / 100.0));
+    }
+    Some(SvgLength::Number(raw.parse::<f32>().ok()?))
+  }
+
   fn resolve(self, units: SvgCoordinateUnits, reference: f32) -> f32 {
     match self {
       SvgLength::Percent(frac) => frac * reference,
@@ -1029,6 +1050,26 @@ fn hash_region(region: &SvgFilterRegion, state: &mut impl Hasher) {
   hash_length(&region.y, state);
   hash_length(&region.width, state);
   hash_length(&region.height, state);
+  match region.units {
+    SvgFilterUnits::ObjectBoundingBox => state.write_u8(0),
+    SvgFilterUnits::UserSpaceOnUse => state.write_u8(1),
+  }
+}
+
+fn hash_optional_length(len: &Option<SvgLength>, state: &mut impl Hasher) {
+  if let Some(len) = len {
+    state.write_u8(1);
+    hash_length(len, state);
+  } else {
+    state.write_u8(0);
+  }
+}
+
+fn hash_primitive_region_override(region: &SvgFilterPrimitiveRegionOverride, state: &mut impl Hasher) {
+  hash_optional_length(&region.x, state);
+  hash_optional_length(&region.y, state);
+  hash_optional_length(&region.width, state);
+  hash_optional_length(&region.height, state);
   match region.units {
     SvgFilterUnits::ObjectBoundingBox => state.write_u8(0),
     SvgFilterUnits::UserSpaceOnUse => state.write_u8(1),
@@ -1452,7 +1493,7 @@ fn svg_filter_fingerprint(filter: &SvgFilter) -> u64 {
     }
     if let Some(region) = &step.region {
       hasher.write_u8(1);
-      hash_region(region, &mut hasher);
+      hash_primitive_region_override(region, &mut hasher);
     } else {
       hasher.write_u8(0);
     }
@@ -1803,16 +1844,16 @@ fn parse_filter_node(node: &roxmltree::Node, image_cache: &ImageCache) -> Option
       parse_color_interpolation_filters(child.attribute("color-interpolation-filters"));
     let tag = child.tag_name().name().to_ascii_lowercase();
     let region_override = {
-      let x_attr = child.attribute("x");
-      let y_attr = child.attribute("y");
-      let width_attr = child.attribute("width");
-      let height_attr = child.attribute("height");
-      if x_attr.is_some() || y_attr.is_some() || width_attr.is_some() || height_attr.is_some() {
-        Some(SvgFilterRegion {
-          x: SvgLength::parse(x_attr, region.x),
-          y: SvgLength::parse(y_attr, region.y),
-          width: SvgLength::parse(width_attr, region.width),
-          height: SvgLength::parse(height_attr, region.height),
+      let x = SvgLength::parse_optional(child.attribute("x"));
+      let y = SvgLength::parse_optional(child.attribute("y"));
+      let width = SvgLength::parse_optional(child.attribute("width"));
+      let height = SvgLength::parse_optional(child.attribute("height"));
+      if x.is_some() || y.is_some() || width.is_some() || height.is_some() {
+        Some(SvgFilterPrimitiveRegionOverride {
+          x,
+          y,
+          width,
+          height,
           units: primitive_units,
         })
       } else {
@@ -3128,13 +3169,7 @@ fn apply_svg_filter_scaled(
 
   clip_to_region(pixmap, filter_region)?;
 
-  let default_primitive_region = SvgFilterRegion {
-    x: def.region.x,
-    y: def.region.y,
-    width: def.region.width,
-    height: def.region.height,
-    units: def.region.units,
-  };
+  let css_filter_region = def.resolve_region(css_bbox);
 
   let source_region = clip_region(filter_region_for_pixmap(pixmap), filter_region);
   let source = FilterResult::new(pixmap.clone(), source_region, filter_region);
@@ -3145,8 +3180,38 @@ fn apply_svg_filter_scaled(
     let color_interpolation_filters = step
       .color_interpolation_filters
       .unwrap_or(def.color_interpolation_filters);
-    let primitive_region_spec = step.region.as_ref().unwrap_or(&default_primitive_region);
-    let css_prim_region = primitive_region_spec.resolve(css_bbox);
+    let mut css_prim_region = css_filter_region;
+    if let Some(region_override) = step.region {
+      debug_assert_eq!(region_override.units, def.primitive_units);
+      let units = match region_override.units {
+        SvgFilterUnits::ObjectBoundingBox => SvgCoordinateUnits::ObjectBoundingBox,
+        SvgFilterUnits::UserSpaceOnUse => SvgCoordinateUnits::UserSpaceOnUse,
+      };
+      if let Some(x) = region_override.x {
+        let resolved = x.resolve(units, css_bbox.width());
+        let offset = match (region_override.units, x) {
+          (SvgFilterUnits::ObjectBoundingBox, _) => css_bbox.min_x(),
+          (SvgFilterUnits::UserSpaceOnUse, SvgLength::Percent(_)) => css_bbox.min_x(),
+          _ => 0.0,
+        };
+        css_prim_region.origin.x = offset + resolved;
+      }
+      if let Some(y) = region_override.y {
+        let resolved = y.resolve(units, css_bbox.height());
+        let offset = match (region_override.units, y) {
+          (SvgFilterUnits::ObjectBoundingBox, _) => css_bbox.min_y(),
+          (SvgFilterUnits::UserSpaceOnUse, SvgLength::Percent(_)) => css_bbox.min_y(),
+          _ => 0.0,
+        };
+        css_prim_region.origin.y = offset + resolved;
+      }
+      if let Some(width) = region_override.width {
+        css_prim_region.size.width = width.resolve(units, css_bbox.width()).max(0.0);
+      }
+      if let Some(height) = region_override.height {
+        css_prim_region.size.height = height.resolve(units, css_bbox.height()).max(0.0);
+      }
+    }
     let mut primitive_region = Rect::from_xywh(
       css_prim_region.x() * scale_x,
       css_prim_region.y() * scale_y,
@@ -6734,11 +6799,11 @@ mod tests {
             dx: 0.0,
             dy: 0.0,
           },
-          region: Some(SvgFilterRegion {
-            x: SvgLength::Number(0.0),
-            y: SvgLength::Number(0.0),
-            width: SvgLength::Number(0.0),
-            height: SvgLength::Number(0.0),
+          region: Some(SvgFilterPrimitiveRegionOverride {
+            x: Some(SvgLength::Number(0.0)),
+            y: Some(SvgLength::Number(0.0)),
+            width: Some(SvgLength::Number(0.0)),
+            height: Some(SvgLength::Number(0.0)),
             units: SvgFilterUnits::UserSpaceOnUse,
           }),
         },
@@ -6931,6 +6996,49 @@ mod default_primitive_region_units_tests {
     assert!(
       pixmap.pixel(9, 9).unwrap().alpha() > 0,
       "expected output to avoid clipping when filter region fully covers the bbox"
+    );
+  }
+}
+
+#[cfg(test)]
+mod filter_primitive_region_override_tests {
+  use super::*;
+
+  #[test]
+  fn primitive_region_partial_override_inherits_filter_region_without_unit_reinterpretation() {
+    let cache = ImageCache::new();
+    let svg = "<svg xmlns='http://www.w3.org/2000/svg'><filter id='f' filterUnits='objectBoundingBox' x='-0.5' y='-0.5' width='2' height='2'><feFlood x='5'/></filter></svg>";
+    let filter = parse_filter_definition(svg, Some("f"), &cache).expect("filter");
+
+    let mut pixmap = new_pixmap(30, 30).unwrap();
+    let bbox = Rect::from_xywh(10.0, 10.0, 10.0, 10.0);
+    apply_svg_filter(filter.as_ref(), &mut pixmap, 1.0, bbox).unwrap();
+
+    assert_eq!(pixmap.pixel(0, 0).unwrap().alpha(), 0);
+    assert!(
+      pixmap.pixel(10, 10).unwrap().alpha() > 0,
+      "expected primitive output inside the resolved filter region"
+    );
+  }
+
+  #[test]
+  fn percent_filter_region_still_allows_partial_overrides() {
+    let cache = ImageCache::new();
+    let svg = "<svg xmlns='http://www.w3.org/2000/svg'><filter id='f' filterUnits='objectBoundingBox' x='-50%' y='-50%' width='200%' height='200%'><feFlood x='6'/></filter></svg>";
+    let filter = parse_filter_definition(svg, Some("f"), &cache).expect("filter");
+
+    let mut pixmap = new_pixmap(30, 30).unwrap();
+    let bbox = Rect::from_xywh(10.0, 10.0, 10.0, 10.0);
+    apply_svg_filter(filter.as_ref(), &mut pixmap, 1.0, bbox).unwrap();
+
+    assert_eq!(
+      pixmap.pixel(5, 10).unwrap().alpha(),
+      0,
+      "expected left edge clipped by primitive override"
+    );
+    assert!(
+      pixmap.pixel(6, 10).unwrap().alpha() > 0,
+      "expected pixels inside primitive region"
     );
   }
 }

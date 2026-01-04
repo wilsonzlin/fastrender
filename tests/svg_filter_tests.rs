@@ -1,7 +1,8 @@
 use fastrender::geometry::Rect;
 use fastrender::paint::svg_filter::{
   apply_svg_filter, ColorInterpolationFilters, CompositeOperator, FilterInput, FilterPrimitive,
-  FilterStep, SvgFilter, SvgFilterRegion, SvgFilterUnits, SvgLength, TurbulenceType,
+  FilterStep, SvgFilter, SvgFilterPrimitiveRegionOverride, SvgFilterRegion, SvgFilterUnits,
+  SvgLength, TurbulenceType,
 };
 use fastrender::Rgba;
 use tiny_skia::{Pixmap, PremultipliedColorU8};
@@ -75,11 +76,11 @@ fn primitive_region_userspace_respects_scale() {
       color: Rgba::from_rgba8(0, 255, 0, 255),
       opacity: 1.0,
     },
-    region: Some(SvgFilterRegion {
-      x: SvgLength::Number(0.0),
-      y: SvgLength::Number(0.0),
-      width: SvgLength::Number(1.0),
-      height: SvgLength::Number(1.0),
+    region: Some(SvgFilterPrimitiveRegionOverride {
+      x: Some(SvgLength::Number(0.0)),
+      y: Some(SvgLength::Number(0.0)),
+      width: Some(SvgLength::Number(1.0)),
+      height: Some(SvgLength::Number(1.0)),
       units: SvgFilterUnits::UserSpaceOnUse,
     }),
   }];
