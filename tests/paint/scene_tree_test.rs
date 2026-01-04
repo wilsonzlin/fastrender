@@ -197,3 +197,47 @@ fn collect_scene_items_inlines_preserve_3d_and_flattens_flat() {
   }
   assert_eq!(scene[3].accumulated_transform.m[12], 13.0);
 }
+
+#[test]
+fn collect_scene_items_composes_child_perspective_into_descendants() {
+  let mut root_sc = stacking_context(
+    TransformStyle::Preserve3d,
+    None,
+    BackfaceVisibility::Visible,
+    BlendMode::Normal,
+  );
+  root_sc.child_perspective = Some(Transform3D::perspective(500.0));
+
+  let child_sc = stacking_context(
+    TransformStyle::Preserve3d,
+    Some(Transform3D::translate(0.0, 0.0, 100.0)),
+    BackfaceVisibility::Visible,
+    BlendMode::Normal,
+  );
+
+  let mut list = DisplayList::new();
+  list.push(DisplayItem::PushStackingContext(root_sc));
+  list.push(DisplayItem::PushStackingContext(child_sc));
+  list.push(DisplayItem::FillRect(FillRectItem {
+    rect: Rect::from_xywh(0.0, 0.0, 1.0, 1.0),
+    color: Rgba::RED,
+  }));
+  list.push(DisplayItem::PopStackingContext);
+  list.push(DisplayItem::PopStackingContext);
+
+  let tree = build_stacking_tree(&list);
+  let root = match &tree[0] {
+    NodeChild::ChildContext(node) => node,
+    _ => panic!("expected root stacking context"),
+  };
+
+  let scene = collect_scene_items(root);
+  assert_eq!(scene.len(), 1);
+
+  let transform = scene[0].accumulated_transform;
+  // When perspective is composed, w depends on z; without perspective it would remain 1.0.
+  let (_x, _y, z, w) = transform.transform_point(0.0, 0.0, 0.0);
+  assert!((z - 100.0).abs() < 1e-6);
+  assert!((w - 0.8).abs() < 1e-6, "expected w=0.8, got {w}");
+  assert!((transform.m[11] + 1.0 / 500.0).abs() < 1e-6);
+}

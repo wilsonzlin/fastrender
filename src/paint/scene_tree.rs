@@ -142,6 +142,13 @@ fn collect_scene_items_inner(
   paint_order: &mut u32,
   items: &mut Vec<SceneItem>,
 ) {
+  let child_base_transform = node
+    .item
+    .child_perspective
+    .as_ref()
+    .map(|perspective| current_transform.multiply(perspective))
+    .unwrap_or(current_transform);
+
   for child in node.children.iter() {
     match child {
       NodeChild::PrimitiveRun(run) => {
@@ -158,7 +165,7 @@ fn collect_scene_items_inner(
       }
       NodeChild::ChildContext(child_node) => {
         let child_transform = child_node.item.transform.unwrap_or(Transform3D::IDENTITY);
-        let accumulated = current_transform.multiply(&child_transform);
+        let accumulated = child_base_transform.multiply(&child_transform);
 
         if extends_3d_context(&child_node.item) {
           collect_scene_items_inner(child_node, accumulated, paint_order, items);
