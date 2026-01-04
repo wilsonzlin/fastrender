@@ -169,7 +169,14 @@ fn parse_simple_var_call<'a>(raw: &'a str) -> Option<(&'a str, Option<&'a str>)>
     .unwrap_or((inner, None));
 
   let name = name_chunk.trim();
-  if !name.starts_with("--") || name.contains(|c: char| c.is_whitespace()) {
+  // The fast path only supports unescaped "simple" custom property names. Enforce the CSS
+  // identifier byte rules so `var(--bad!, 1px)` (invalid syntax) doesn't get treated as a missing
+  // variable with a valid fallback.
+  if !name.starts_with("--")
+    || name.len() <= 2
+    || name.as_bytes()[2..].iter().any(|&b| !is_ident_byte(b))
+    || name.contains(|c: char| c.is_whitespace())
+  {
     return None;
   }
 
@@ -1567,6 +1574,24 @@ mod tests {
     assert!(
       TOKEN_RESOLVER_ENTRY_COUNT.with(|count| count.get()) > 0,
       "comment-containing var() call should fall back to tokenization"
+    );
+  }
+
+  #[test]
+  fn test_simple_var_call_with_invalid_custom_property_name_does_not_apply_fallback() {
+    let props = CustomPropertyStore::default();
+    let value = PropertyValue::Keyword("var(--bad!, 10px)".to_string());
+
+    TOKEN_RESOLVER_ENTRY_COUNT.with(|count| count.set(0));
+    let resolved = resolve_var_for_property(&value, &props, "width");
+
+    assert!(
+      matches!(resolved, VarResolutionResult::InvalidSyntax(_)),
+      "invalid var() syntax should not apply the fallback, got {resolved:?}"
+    );
+    assert!(
+      TOKEN_RESOLVER_ENTRY_COUNT.with(|count| count.get()) > 0,
+      "invalid var() name should fall back to tokenization"
     );
   }
 
