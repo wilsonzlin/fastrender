@@ -954,15 +954,13 @@ impl DisplayListOptimizer {
       || !bounds.y().is_finite()
   }
 
-  fn map_rect_with_transform(rect: Rect, transform: &Transform3D) -> Option<Rect> {
-    if transform.is_identity() {
-      return Some(rect);
-    }
+  fn transform_collapses(transform: &Transform3D) -> bool {
+    let unit = Rect::from_xywh(0.0, 0.0, 1.0, 1.0);
     let corners = [
-      (rect.min_x(), rect.min_y()),
-      (rect.max_x(), rect.min_y()),
-      (rect.max_x(), rect.max_y()),
-      (rect.min_x(), rect.max_y()),
+      (unit.min_x(), unit.min_y()),
+      (unit.max_x(), unit.min_y()),
+      (unit.max_x(), unit.max_y()),
+      (unit.min_x(), unit.max_y()),
     ];
     let mut min_x = f32::INFINITY;
     let mut min_y = f32::INFINITY;
@@ -970,28 +968,18 @@ impl DisplayListOptimizer {
     let mut max_y = f32::NEG_INFINITY;
 
     for (x, y) in corners {
-      let (tx, ty, _tz, tw) = transform.transform_point(x, y, 0.0);
-      if !tx.is_finite()
-        || !ty.is_finite()
-        || !tw.is_finite()
-        || tw.abs() < Transform3D::MIN_PROJECTIVE_W
-      {
-        return None;
-      }
-      let px = tx / tw;
-      let py = ty / tw;
-      min_x = min_x.min(px);
-      min_y = min_y.min(py);
-      max_x = max_x.max(px);
-      max_y = max_y.max(py);
+      let Some(p) = transform.project_point_2d(x, y) else {
+        return false;
+      };
+      min_x = min_x.min(p.x);
+      min_y = min_y.min(p.y);
+      max_x = max_x.max(p.x);
+      max_y = max_y.max(p.y);
     }
 
     let width = max_x - min_x;
     let height = max_y - min_y;
-    if width <= 0.0 || height <= 0.0 {
-      return None;
-    }
-    Some(Rect::from_xywh(min_x, min_y, width, height))
+    !(width > 0.0 && height > 0.0 && width.is_finite() && height.is_finite())
   }
 
   fn transform_rect_3d_z0(transform: &Transform3D, rect: Rect) -> Option<Rect> {
@@ -1036,13 +1024,6 @@ impl DisplayListOptimizer {
       return None;
     }
     Some(Rect::from_xywh(min_x, min_y, width, height))
-  }
-
-  fn transform_collapses(transform: &Transform3D) -> bool {
-    matches!(
-      Self::map_rect_with_transform(Rect::from_xywh(0.0, 0.0, 1.0, 1.0), transform),
-      None
-    )
   }
 
   fn transform_scale_factor(transform: &Transform3D, reference: Rect) -> f32 {
