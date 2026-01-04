@@ -140,6 +140,7 @@ impl ShardedFlexCache {
     value: FlexCacheValue,
     per_node_cap: usize,
   ) -> bool {
+    let per_node_cap = per_node_cap.max(1);
     let shard_idx = self.shard_index(node_key);
     let Some(shard) = self.shards.get(shard_idx) else {
       return false;
@@ -149,13 +150,15 @@ impl ShardedFlexCache {
     if entry.contains_key(&key) {
       return false;
     }
-    if entry.len() >= per_node_cap {
-      if let Some(first_key) = entry.keys().next().copied() {
-        entry.remove(&first_key);
+    entry.insert(key, value);
+    while entry.len() > per_node_cap {
+      if let Some(max_key) = entry.keys().max().copied() {
+        entry.remove(&max_key);
+      } else {
+        break;
       }
     }
-    entry.insert(key, value);
-    true
+    entry.contains_key(&key)
   }
 
   pub(crate) fn shard_stats(&self) -> Vec<ShardStats> {
@@ -202,10 +205,13 @@ pub(crate) fn find_cached_fragment(
   cache: &FlexCacheEntry,
   target_size: Size,
 ) -> Option<FlexCacheValue> {
-  let mut best: Option<FlexCacheValue> = None;
+  let mut best: Option<&FlexCacheValue> = None;
+  let mut best_key: Option<FlexCacheKey> = None;
   let mut best_score = f32::MAX;
+  let mut best_dw = f32::MAX;
+  let mut best_dh = f32::MAX;
   let (eps_w, eps_h) = cache_tolerances(target_size);
-  for value in cache.values() {
+  for (key, value) in cache.iter() {
     let size = value.measured_size;
     if !size.width.is_finite() || !size.height.is_finite() {
       continue;
@@ -214,13 +220,35 @@ pub(crate) fn find_cached_fragment(
     let dh = (size.height - target_size.height).abs();
     if dw <= eps_w && dh <= eps_h {
       let score = dw + dh;
-      if score < best_score {
+      let better = match best {
+        None => true,
+        Some(_) => match score.total_cmp(&best_score) {
+          std::cmp::Ordering::Less => true,
+          std::cmp::Ordering::Greater => false,
+          std::cmp::Ordering::Equal => match dw.total_cmp(&best_dw) {
+            std::cmp::Ordering::Less => true,
+            std::cmp::Ordering::Greater => false,
+            std::cmp::Ordering::Equal => match dh.total_cmp(&best_dh) {
+              std::cmp::Ordering::Less => true,
+              std::cmp::Ordering::Greater => false,
+              std::cmp::Ordering::Equal => match best_key {
+                None => true,
+                Some(best_key) => *key < best_key,
+              },
+            },
+          },
+        },
+      };
+      if better {
         best_score = score;
-        best = Some(value.clone());
+        best_dw = dw;
+        best_dh = dh;
+        best_key = Some(*key);
+        best = Some(value);
       }
     }
   }
-  best
+  best.cloned()
 }
 
 pub(crate) fn find_layout_cache_fragment(
@@ -234,10 +262,13 @@ pub(crate) fn find_cached_fragment_by_border_size(
   cache: &FlexCacheEntry,
   target_size: Size,
 ) -> Option<FlexCacheValue> {
-  let mut best: Option<FlexCacheValue> = None;
+  let mut best: Option<&FlexCacheValue> = None;
+  let mut best_key: Option<FlexCacheKey> = None;
   let mut best_score = f32::MAX;
+  let mut best_dw = f32::MAX;
+  let mut best_dh = f32::MAX;
   let (eps_w, eps_h) = cache_tolerances(target_size);
-  for value in cache.values() {
+  for (key, value) in cache.iter() {
     let size = value.border_size;
     if !size.width.is_finite() || !size.height.is_finite() {
       continue;
@@ -246,13 +277,35 @@ pub(crate) fn find_cached_fragment_by_border_size(
     let dh = (size.height - target_size.height).abs();
     if dw <= eps_w && dh <= eps_h {
       let score = dw + dh;
-      if score < best_score {
+      let better = match best {
+        None => true,
+        Some(_) => match score.total_cmp(&best_score) {
+          std::cmp::Ordering::Less => true,
+          std::cmp::Ordering::Greater => false,
+          std::cmp::Ordering::Equal => match dw.total_cmp(&best_dw) {
+            std::cmp::Ordering::Less => true,
+            std::cmp::Ordering::Greater => false,
+            std::cmp::Ordering::Equal => match dh.total_cmp(&best_dh) {
+              std::cmp::Ordering::Less => true,
+              std::cmp::Ordering::Greater => false,
+              std::cmp::Ordering::Equal => match best_key {
+                None => true,
+                Some(best_key) => *key < best_key,
+              },
+            },
+          },
+        },
+      };
+      if better {
         best_score = score;
-        best = Some(value.clone());
+        best_dw = dw;
+        best_dh = dh;
+        best_key = Some(*key);
+        best = Some(value);
       }
     }
   }
-  best
+  best.cloned()
 }
 
 #[cfg(test)]
@@ -261,6 +314,9 @@ mod tests {
   use crate::geometry::Rect;
   use crate::tree::fragment_tree::FragmentContent;
   use crate::tree::fragment_tree::FragmentNode;
+  use rustc_hash::FxHasher;
+  use std::collections::BTreeMap;
+  use std::hash::{Hash, Hasher};
   use std::sync::Arc;
 
   #[test]
@@ -302,5 +358,110 @@ mod tests {
       .expect("expected border-box cache hit");
     assert_eq!(found.border_size, used_border_size);
     assert_eq!(found.fragment.bounds.size, fragment_bounds.size);
+  }
+
+  fn make_test_fragment(bounds: Rect) -> Arc<FragmentNode> {
+    Arc::new(FragmentNode::new(
+      bounds,
+      FragmentContent::Block { box_id: None },
+      vec![],
+    ))
+  }
+
+  fn find_colliding_flex_cache_keys(mask_bits: u32) -> (FlexCacheKey, FlexCacheKey) {
+    let mask = (1u64 << mask_bits) - 1;
+    let mut seen: BTreeMap<u64, FlexCacheKey> = BTreeMap::new();
+    let max = 1u32 << (mask_bits + 1);
+    for i in 0..max {
+      let key: FlexCacheKey = (Some(i), Some(0));
+      let mut hasher = FxHasher::default();
+      key.hash(&mut hasher);
+      let slot = hasher.finish() & mask;
+      if let Some(&prev) = seen.get(&slot) {
+        return if prev <= key {
+          (prev, key)
+        } else {
+          (key, prev)
+        };
+      }
+      seen.insert(slot, key);
+    }
+    panic!("failed to find colliding flex cache keys");
+  }
+
+  #[test]
+  fn find_fragment_tie_break_is_deterministic() {
+    let (key_small, key_large) = find_colliding_flex_cache_keys(10);
+
+    let cache_a = ShardedFlexCache::with_shard_count(CacheKind::Measure, 1);
+    let cache_b = ShardedFlexCache::with_shard_count(CacheKind::Measure, 1);
+    let node_key = 999u64;
+
+    let target_size = Size::new(100.0, 100.0);
+    let value_small = FlexCacheValue {
+      measured_size: Size::new(99.0, 100.0),
+      border_size: Size::new(99.0, 100.0),
+      fragment: make_test_fragment(Rect::from_xywh(0.0, 0.0, 99.0, 100.0)),
+    };
+    let value_large = FlexCacheValue {
+      measured_size: Size::new(101.0, 100.0),
+      border_size: Size::new(101.0, 100.0),
+      fragment: make_test_fragment(Rect::from_xywh(0.0, 0.0, 101.0, 100.0)),
+    };
+
+    assert!(cache_a.insert(node_key, key_small, value_small.clone(), 16));
+    assert!(cache_a.insert(node_key, key_large, value_large.clone(), 16));
+
+    assert!(cache_b.insert(node_key, key_large, value_large, 16));
+    assert!(cache_b.insert(node_key, key_small, value_small, 16));
+
+    let found_a = cache_a
+      .find_fragment(node_key, target_size)
+      .expect("expected cache hit");
+    let found_b = cache_b
+      .find_fragment(node_key, target_size)
+      .expect("expected cache hit");
+
+    assert_eq!(found_a.measured_size, found_b.measured_size);
+    assert_eq!(found_a.measured_size, Size::new(99.0, 100.0));
+  }
+
+  #[test]
+  fn insert_eviction_is_deterministic() {
+    let cache_a = ShardedFlexCache::with_shard_count(CacheKind::Measure, 1);
+    let cache_b = ShardedFlexCache::with_shard_count(CacheKind::Measure, 1);
+    let node_key = 456u64;
+    let per_node_cap = 2;
+
+    let keys = [(Some(1), Some(0)), (Some(2), Some(0)), (Some(3), Some(0))];
+
+    let make_value = |w: f32| FlexCacheValue {
+      measured_size: Size::new(w, 10.0),
+      border_size: Size::new(w, 10.0),
+      fragment: make_test_fragment(Rect::from_xywh(0.0, 0.0, w, 10.0)),
+    };
+
+    assert!(cache_a.insert(node_key, keys[0], make_value(1.0), per_node_cap));
+    assert!(cache_a.insert(node_key, keys[1], make_value(2.0), per_node_cap));
+    // The third (largest) key should be deterministically evicted so we keep the smallest N keys.
+    assert!(!cache_a.insert(node_key, keys[2], make_value(3.0), per_node_cap));
+
+    assert!(cache_b.insert(node_key, keys[2], make_value(3.0), per_node_cap));
+    assert!(cache_b.insert(node_key, keys[1], make_value(2.0), per_node_cap));
+    assert!(cache_b.insert(node_key, keys[0], make_value(1.0), per_node_cap));
+
+    let surviving_a: Vec<FlexCacheKey> = keys
+      .iter()
+      .copied()
+      .filter(|key| cache_a.get(node_key, key).is_some())
+      .collect();
+    let surviving_b: Vec<FlexCacheKey> = keys
+      .iter()
+      .copied()
+      .filter(|key| cache_b.get(node_key, key).is_some())
+      .collect();
+
+    assert_eq!(surviving_a, surviving_b);
+    assert_eq!(surviving_a, vec![keys[0], keys[1]]);
   }
 }
