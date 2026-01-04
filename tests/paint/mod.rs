@@ -34,6 +34,7 @@ mod marker_shadow_opacity;
 mod marker_shadow_order;
 mod marker_text_shadow_vertical;
 mod marker_underline_order;
+mod mask_parallel_translation_golden;
 mod math_render;
 mod multi_root_display_list;
 mod offscreen_culling_stress;

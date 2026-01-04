@@ -4620,11 +4620,20 @@ impl DisplayListRenderer {
       rects.content = rects.content.translate(canvas_offset_css);
     }
     let mut combined: Option<CompositeMask> = None;
-    let canvas_bounds_css = Rect::from_xywh(0.0, 0.0, viewport.0, viewport.1);
+    let transform = self.canvas.transform();
+    let inv_transform = invert_transform(transform).unwrap_or(Transform::identity());
+    let canvas_bounds_device = transform_rect(self.canvas.bounds(), &inv_transform);
+    let canvas_bounds_css = Rect::from_xywh(
+      canvas_bounds_device.x() / self.scale,
+      canvas_bounds_device.y() / self.scale,
+      canvas_bounds_device.width() / self.scale,
+      canvas_bounds_device.height() / self.scale,
+    );
     let canvas_clip_bounds_css = self
       .canvas
       .clip_bounds()
       .map(|rect| {
+        let rect = transform_rect(rect, &inv_transform);
         Rect::from_xywh(
           rect.x() / self.scale,
           rect.y() / self.scale,
@@ -4865,16 +4874,18 @@ impl DisplayListRenderer {
         }
       };
 
-      let canvas_w = self.canvas.width() as i32;
-      let canvas_h = self.canvas.height() as i32;
       let mut x0 = (clip_rect_css.min_x() * self.scale).floor() as i32;
       let mut y0 = (clip_rect_css.min_y() * self.scale).floor() as i32;
       let mut x1 = (clip_rect_css.max_x() * self.scale).ceil() as i32;
       let mut y1 = (clip_rect_css.max_y() * self.scale).ceil() as i32;
-      x0 = x0.clamp(0, canvas_w);
-      y0 = y0.clamp(0, canvas_h);
-      x1 = x1.clamp(0, canvas_w);
-      y1 = y1.clamp(0, canvas_h);
+      let canvas_x0 = canvas_bounds_device.min_x().floor() as i32;
+      let canvas_y0 = canvas_bounds_device.min_y().floor() as i32;
+      let canvas_x1 = canvas_bounds_device.max_x().ceil() as i32;
+      let canvas_y1 = canvas_bounds_device.max_y().ceil() as i32;
+      x0 = x0.clamp(canvas_x0, canvas_x1);
+      y0 = y0.clamp(canvas_y0, canvas_y1);
+      x1 = x1.clamp(canvas_x0, canvas_x1);
+      y1 = y1.clamp(canvas_y0, canvas_y1);
       let region_w = x1.saturating_sub(x0) as u32;
       let region_h = y1.saturating_sub(y0) as u32;
       if region_w == 0 || region_h == 0 {
