@@ -82,10 +82,13 @@ cargo xtask chrome-baseline-fixtures
 # 3) Generate a combined Chrome-vs-FastRender diff report:
 # (This re-runs steps 1-2 by default; pass `--no-chrome` to reuse an existing baseline under `<out-dir>/chrome`.)
 # Add `--fail-on-differences` to exit non-zero on diffs, and `--no-build` to reuse an existing
-# `target/release/diff_renders` binary.
-# Add `--write-snapshot` to also write FastRender snapshots/diagnostics (for later `diff_snapshots`).
+# `target/release/diff_renders` binary. Add `--write-snapshot` to also write per-fixture FastRender
+# snapshots/diagnostics (for later `diff_snapshots`) alongside the PNGs.
 cargo xtask fixture-chrome-diff
 # Report: target/fixture_chrome_diff/report.html
+#
+# Shortcut wrapper for the same offline fixture loop (writes `target/chrome_vs_fastrender_fixtures.html`):
+#   scripts/chrome_vs_fastrender_fixtures.sh
 #
 # Cached-pages Chrome loop (best-effort; non-deterministic):
 # Live subresources can change, so treat this as rapid triage only.
