@@ -209,7 +209,6 @@ Notes:
   - Paths: `--fixtures-root <dir>`, `--out-dir <dir>`.
   - Render params: `--viewport <WxH>`, `--dpr <float>`, `--media {screen|print}`, `--timeout <secs>`.
   - Parallelism: `--jobs/-j <n>`.
-  - Diagnostics: `--diagnostics-json` to write structured diagnostics alongside each PNG.
 
 ## `cargo xtask chrome-baseline-fixtures`
 
