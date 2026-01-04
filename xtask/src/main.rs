@@ -1806,12 +1806,25 @@ fn run_diff_renders(args: DiffRendersArgs) -> Result<()> {
   let html_path = output_dir.join("diff_report.html");
   let json_path = output_dir.join("diff_report.json");
 
-  let mut cmd = Command::new("cargo");
-  cmd
-    .arg("run")
+  // Note: we build + execute the binary directly instead of using `cargo run`. The `diff_renders`
+  // binary returns exit code 1 when diffs are found, and `cargo run` would print a scary
+  // "process didn't exit successfully" error even though we still want to keep the report.
+  let repo_root = repo_root();
+  let mut build_cmd = Command::new("cargo");
+  build_cmd
+    .arg("build")
     .arg("--release")
     .args(["--bin", "diff_renders"])
-    .arg("--")
+    .current_dir(&repo_root);
+  println!("Building diff_renders...");
+  run_command(build_cmd)?;
+
+  let exe = repo_root
+    .join("target")
+    .join("release")
+    .join(format!("diff_renders{}", std::env::consts::EXE_SUFFIX));
+  let mut cmd = Command::new(&exe);
+  cmd
     .arg("--before")
     .arg(&before)
     .arg("--after")
@@ -1823,15 +1836,15 @@ fn run_diff_renders(args: DiffRendersArgs) -> Result<()> {
     .arg("--json")
     .arg(&json_path)
     .arg("--html")
-    .arg(&html_path);
+    .arg(&html_path)
+    .current_dir(&repo_root);
 
-  cmd.current_dir(repo_root());
   println!("Running diff_renders...");
   print_command(&cmd);
 
   let status = cmd
     .status()
-    .with_context(|| format!("failed to run {:?}", cmd.get_program()))?;
+    .with_context(|| format!("failed to run {exe:?}"))?;
 
   if !json_path.exists() {
     bail!(
