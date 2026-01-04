@@ -16,12 +16,24 @@ fn fixtures_dir() -> PathBuf {
   PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
 }
 
+fn tests_dir() -> PathBuf {
+  PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests")
+}
+
 fn fonts_dir() -> PathBuf {
   fixtures_dir().join("fonts")
 }
 
 fn font_path(name: &str) -> PathBuf {
   fonts_dir().join(name)
+}
+
+fn test_fonts_dir() -> PathBuf {
+  tests_dir().join("fonts")
+}
+
+fn test_font_path(name: &str) -> PathBuf {
+  test_fonts_dir().join(name)
 }
 
 pub fn load_fixture_font(name: &str) -> LoadedFont {
@@ -35,6 +47,27 @@ pub fn load_fixture_font(name: &str) -> LoadedFont {
 
   // Some fixtures (notably ones that contain sbix strikes) are not parseable by our `fontdb`
   // dependency, but we can still use them in tests via the renderer's direct `ttf_parser` path.
+  LoadedFont {
+    id: None,
+    data: Arc::new(bytes),
+    index: 0,
+    family: name.to_string(),
+    weight: FontWeight::NORMAL,
+    style: FontStyle::Normal,
+    stretch: FontStretch::Normal,
+    face_metrics_overrides: Default::default(),
+  }
+}
+
+pub fn load_test_font(name: &str) -> LoadedFont {
+  let bytes = std::fs::read(test_font_path(name)).expect("load font bytes");
+  let mut db = FontDatabase::empty();
+  if db.load_font_data(bytes.clone()).is_ok() {
+    if let Some(font) = db.first_font() {
+      return font;
+    }
+  }
+
   LoadedFont {
     id: None,
     data: Arc::new(bytes),

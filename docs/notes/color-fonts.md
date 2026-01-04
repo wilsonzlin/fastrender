@@ -94,11 +94,17 @@ limitations.
   from shaped runs (see
   [`DisplayListBuilder::emit_shaped_runs`](../../src/paint/display_list_builder.rs)
   and the list-marker emission helpers).
-- `DisplayListRenderer::render_text` paints glyph runs via
-  [`Canvas::draw_text_run`](../../src/paint/canvas.rs), passing
-  `palette_index`/`palette_overrides`/`palette_override_hash` through to
-  [`TextRasterizer::render_glyph_run`](../../src/paint/text_rasterize.rs) so COLR/CPAL
-  overrides apply end-to-end through the default display-list path.
+- `DisplayListRenderer` passes the overrides + hash through to both:
+  - `Canvas::draw_text_run` for normal text, and
+  - `DisplayListRenderer::render_text_shadows` for the text-shadow offscreen
+    rasterization path (see
+    [`src/paint/display_list_renderer.rs`](../../src/paint/display_list_renderer.rs)).
+- Net effect: `@font-palette-values override-colors` is applied end-to-end via the
+  default display list renderer, and the override hash participates in caching so
+  different override sets do not alias.
+- Regressions: `tests/paint/display_list_font_palette_overrides_test.rs` compares
+  display list output against direct `TextRasterizer` output and asserts that
+  overridden palette colors are present in the final pixmap.
 
 ## COLR v1 coverage and variations
 
@@ -144,11 +150,15 @@ Implemented COLRv1 features include:
   (silhouette shadow) and then blurred/composited. Embedded COLR/SVG/bitmap colors
   are **not** preserved in the shadow (see
   `tests/paint/display_list_renderer_test.rs::color_glyph_shadow_matches_golden`).
+  Palette overrides are still passed through to the shadow rasterization step
+  (notably affecting alpha when an override introduces transparency).
 
 ## Limitations
 
-- `text-shadow` is implemented as a silhouette shadow (tinted alpha mask), so
-  embedded palette/gradient colors from color fonts are not preserved.
+- The `Canvas::draw_text` convenience API does not accept `palette_overrides` /
+  `palette_override_hash`; callers that need `@font-palette-values override-colors`
+  must use `Canvas::draw_text_run` (or call `TextRasterizer::render_glyph_run`
+  directly).
 - `sbix` supports PNG + JPEG only; other `sbix` tags are skipped (see
   [`bitmap.rs`](../../src/text/color_fonts/bitmap.rs)).
 - SVG glyphs are rendered with `usvg` resources disabled and are rejected if the

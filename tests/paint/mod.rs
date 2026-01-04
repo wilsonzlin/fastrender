@@ -16,6 +16,7 @@ mod color_mix_display_list_test;
 mod color_mix_polar_display_list_test;
 mod contain_paint;
 mod display_list_color_fonts_test;
+mod display_list_font_palette_overrides_test;
 mod display_list_paint_multi_root;
 mod display_list_regressions;
 mod display_list_renderer_test;
