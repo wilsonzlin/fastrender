@@ -184,8 +184,10 @@ pub fn is_emoji_presentation(c: char) -> bool {
 /// assert!(!is_emoji_modifier('A'));
 /// ```
 pub fn is_emoji_modifier(c: char) -> bool {
-  let cp = c as u32;
-  (0x1f3fb..=0x1f3ff).contains(&cp)
+  if c.is_ascii() {
+    return false;
+  }
+  super::emoji_tables::is_emoji_modifier(c as u32)
 }
 
 /// Check if a character is an emoji modifier base
@@ -203,75 +205,10 @@ pub fn is_emoji_modifier(c: char) -> bool {
 /// assert!(!is_emoji_modifier_base('🚀')); // Rocket (not a modifier base)
 /// ```
 pub fn is_emoji_modifier_base(c: char) -> bool {
-  let cp = c as u32;
-
-  // Hand gestures (U+1F44x range)
-  if (0x1f44a..=0x1f44f).contains(&cp) {
-    return true;
+  if c.is_ascii() {
+    return false;
   }
-
-  // More hand signs
-  if matches!(
-    cp,
-    0x1F440 // Eyes
-        | 0x1F442 // Ear
-        | 0x1F443 // Nose
-        | 0x1F446..=0x1f450 // Pointing, hands
-  ) {
-    return true;
-  }
-
-  // People and body parts
-  if (0x1f466..=0x1f478).contains(&cp) {
-    return true;
-  }
-
-  // More people emoji
-  if (0x1f47c..=0x1f47c).contains(&cp)
-    || (0x1f481..=0x1f487).contains(&cp)
-    || (0x1f4aa..=0x1f4aa).contains(&cp)
-  {
-    return true;
-  }
-
-  // People (U+1F574-U+1F575)
-  if matches!(cp, 0x1f574..=0x1f575) {
-    return true;
-  }
-
-  // Person walking, standing, etc.
-  if (0x1f6a3..=0x1f6a3).contains(&cp)
-    || (0x1f6b4..=0x1f6b6).contains(&cp)
-    || (0x1f6c0..=0x1f6c0).contains(&cp)
-    || (0x1f6cc..=0x1f6cc).contains(&cp)
-  {
-    return true;
-  }
-
-  // Hands and gestures (Supplemental)
-  if (0x1f90c..=0x1f90f).contains(&cp)
-    || (0x1f918..=0x1f91f).contains(&cp)
-    || (0x1f926..=0x1f926).contains(&cp)
-    || (0x1f930..=0x1f939).contains(&cp)
-    || (0x1f93c..=0x1f93e).contains(&cp)
-    || (0x1f977..=0x1f977).contains(&cp)
-    || (0x1f9b5..=0x1f9b6).contains(&cp)
-    || (0x1f9b8..=0x1f9b9).contains(&cp)
-    || (0x1f9bb..=0x1f9bb).contains(&cp)
-    || (0x1f9cd..=0x1f9cf).contains(&cp)
-    || (0x1f9d1..=0x1f9dd).contains(&cp)
-    || (0x1fac3..=0x1fac5).contains(&cp)
-    || (0x1faf0..=0x1faf8).contains(&cp)
-  {
-    return true;
-  }
-
-  // Index pointing (various)
-  if matches!(cp, 0x261d | 0x26f9 | 0x270a..=0x270d) {
-    return true;
-  }
-
-  false
+  super::emoji_tables::is_emoji_modifier_base(c as u32)
 }
 
 /// Check if a character is a regional indicator
@@ -923,6 +860,7 @@ mod tests {
     assert!(is_emoji_modifier_base('👎')); // Thumbs down
     assert!(is_emoji_modifier_base('👏')); // Clapping hands
     assert!(is_emoji_modifier_base('🤝')); // Handshake
+    assert!(is_emoji_modifier_base('🏌')); // Person golfing (was previously missed by ad-hoc ranges)
 
     assert!(!is_emoji_modifier_base('🚀')); // Rocket
     assert!(!is_emoji_modifier_base('🔥')); // Fire
@@ -998,6 +936,15 @@ mod tests {
     assert_eq!(seqs[0].chars.len(), 2);
     assert_eq!(seqs[0].chars[0], '👋');
     assert!(is_emoji_modifier(seqs[0].chars[1]));
+    assert_eq!(seqs[0].sequence_type, EmojiSequenceType::WithModifier);
+  }
+
+  #[test]
+  fn test_find_emoji_sequences_with_modifier_golfer() {
+    // U+1F3CC is Emoji_Modifier_Base in Unicode, but we previously missed it with ad-hoc ranges.
+    let seqs = find_emoji_sequences("🏌🏽");
+    assert_eq!(seqs.len(), 1);
+    assert_eq!(seqs[0].chars, vec!['🏌', '🏽']);
     assert_eq!(seqs[0].sequence_type, EmojiSequenceType::WithModifier);
   }
 

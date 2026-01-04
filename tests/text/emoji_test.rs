@@ -96,6 +96,7 @@ fn test_modifier_bases() {
   assert!(is_emoji_modifier_base('👍')); // Thumbs up
   assert!(is_emoji_modifier_base('👎')); // Thumbs down
   assert!(is_emoji_modifier_base('👏')); // Clapping hands
+  assert!(is_emoji_modifier_base('🏌')); // Person golfing
 
   // Non-modifier bases
   assert!(!is_emoji_modifier_base('🚀')); // Rocket can't have skin tone
@@ -111,6 +112,15 @@ fn test_emoji_sequence_with_skin_tone() {
   assert_eq!(seqs[0].chars.len(), 2);
   assert_eq!(seqs[0].chars[0], '👋');
   assert!(is_emoji_modifier(seqs[0].chars[1]));
+  assert_eq!(seqs[0].sequence_type, EmojiSequenceType::WithModifier);
+}
+
+#[test]
+fn test_emoji_sequence_with_skin_tone_golfer() {
+  // Person golfing + skin tone modifier: 🏌🏽
+  let seqs = find_emoji_sequences("🏌🏽");
+  assert_eq!(seqs.len(), 1);
+  assert_eq!(seqs[0].chars, vec!['🏌', '🏽']);
   assert_eq!(seqs[0].sequence_type, EmojiSequenceType::WithModifier);
 }
 

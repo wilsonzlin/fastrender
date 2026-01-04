@@ -53,6 +53,8 @@ fn generate_tables(path: &Path) -> Result<String> {
     fs::read_to_string(path).with_context(|| format!("reading emoji data from {path:?}"))?;
   let mut emoji = Vec::new();
   let mut emoji_presentation = Vec::new();
+  let mut emoji_modifier = Vec::new();
+  let mut emoji_modifier_base = Vec::new();
   let mut emoji_component = Vec::new();
 
   for (idx, raw_line) in contents.lines().enumerate() {
@@ -75,6 +77,8 @@ fn generate_tables(path: &Path) -> Result<String> {
     match property_raw {
       "Emoji" => emoji.push(Range::new(start, end)),
       "Emoji_Presentation" => emoji_presentation.push(Range::new(start, end)),
+      "Emoji_Modifier" => emoji_modifier.push(Range::new(start, end)),
+      "Emoji_Modifier_Base" => emoji_modifier_base.push(Range::new(start, end)),
       "Emoji_Component" => emoji_component.push(Range::new(start, end)),
       _ => {}
     }
@@ -82,10 +86,14 @@ fn generate_tables(path: &Path) -> Result<String> {
 
   emoji.sort_by(range_sort);
   emoji_presentation.sort_by(range_sort);
+  emoji_modifier.sort_by(range_sort);
+  emoji_modifier_base.sort_by(range_sort);
   emoji_component.sort_by(range_sort);
 
   merge_ranges(&mut emoji);
   merge_ranges(&mut emoji_presentation);
+  merge_ranges(&mut emoji_modifier);
+  merge_ranges(&mut emoji_modifier_base);
   merge_ranges(&mut emoji_component);
 
   let mut out = String::new();
@@ -107,6 +115,8 @@ fn generate_tables(path: &Path) -> Result<String> {
 
   write_ranges(&mut out, "EMOJI_RANGES", &emoji);
   write_ranges(&mut out, "EMOJI_PRESENTATION_RANGES", &emoji_presentation);
+  write_ranges(&mut out, "EMOJI_MODIFIER_RANGES", &emoji_modifier);
+  write_ranges(&mut out, "EMOJI_MODIFIER_BASE_RANGES", &emoji_modifier_base);
   write_ranges(&mut out, "EMOJI_COMPONENT_RANGES", &emoji_component);
 
   out.push_str("#[inline]\n");
@@ -117,6 +127,16 @@ fn generate_tables(path: &Path) -> Result<String> {
   out.push_str("#[inline]\n");
   out.push_str("pub(crate) fn is_emoji_presentation(cp: u32) -> bool {\n");
   out.push_str("  in_ranges(cp, EMOJI_PRESENTATION_RANGES)\n");
+  out.push_str("}\n\n");
+
+  out.push_str("#[inline]\n");
+  out.push_str("pub(crate) fn is_emoji_modifier(cp: u32) -> bool {\n");
+  out.push_str("  in_ranges(cp, EMOJI_MODIFIER_RANGES)\n");
+  out.push_str("}\n\n");
+
+  out.push_str("#[inline]\n");
+  out.push_str("pub(crate) fn is_emoji_modifier_base(cp: u32) -> bool {\n");
+  out.push_str("  in_ranges(cp, EMOJI_MODIFIER_BASE_RANGES)\n");
   out.push_str("}\n\n");
 
   out.push_str("#[inline]\n");

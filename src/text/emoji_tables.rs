@@ -250,6 +250,53 @@ pub(crate) const EMOJI_PRESENTATION_RANGES: &[EmojiRange] = &[
   EmojiRange { start: 0x1FAF0, end: 0x1FAF8 },
 ];
 
+pub(crate) const EMOJI_MODIFIER_RANGES: &[EmojiRange] = &[
+  EmojiRange { start: 0x1F3FB, end: 0x1F3FF },
+];
+
+pub(crate) const EMOJI_MODIFIER_BASE_RANGES: &[EmojiRange] = &[
+  EmojiRange { start: 0x261D, end: 0x261D },
+  EmojiRange { start: 0x26F9, end: 0x26F9 },
+  EmojiRange { start: 0x270A, end: 0x270D },
+  EmojiRange { start: 0x1F385, end: 0x1F385 },
+  EmojiRange { start: 0x1F3C2, end: 0x1F3C4 },
+  EmojiRange { start: 0x1F3C7, end: 0x1F3C7 },
+  EmojiRange { start: 0x1F3CA, end: 0x1F3CC },
+  EmojiRange { start: 0x1F442, end: 0x1F443 },
+  EmojiRange { start: 0x1F446, end: 0x1F450 },
+  EmojiRange { start: 0x1F466, end: 0x1F478 },
+  EmojiRange { start: 0x1F47C, end: 0x1F47C },
+  EmojiRange { start: 0x1F481, end: 0x1F483 },
+  EmojiRange { start: 0x1F485, end: 0x1F487 },
+  EmojiRange { start: 0x1F48F, end: 0x1F48F },
+  EmojiRange { start: 0x1F491, end: 0x1F491 },
+  EmojiRange { start: 0x1F4AA, end: 0x1F4AA },
+  EmojiRange { start: 0x1F574, end: 0x1F575 },
+  EmojiRange { start: 0x1F57A, end: 0x1F57A },
+  EmojiRange { start: 0x1F590, end: 0x1F590 },
+  EmojiRange { start: 0x1F595, end: 0x1F596 },
+  EmojiRange { start: 0x1F645, end: 0x1F647 },
+  EmojiRange { start: 0x1F64B, end: 0x1F64F },
+  EmojiRange { start: 0x1F6A3, end: 0x1F6A3 },
+  EmojiRange { start: 0x1F6B4, end: 0x1F6B6 },
+  EmojiRange { start: 0x1F6C0, end: 0x1F6C0 },
+  EmojiRange { start: 0x1F6CC, end: 0x1F6CC },
+  EmojiRange { start: 0x1F90C, end: 0x1F90C },
+  EmojiRange { start: 0x1F90F, end: 0x1F90F },
+  EmojiRange { start: 0x1F918, end: 0x1F91F },
+  EmojiRange { start: 0x1F926, end: 0x1F926 },
+  EmojiRange { start: 0x1F930, end: 0x1F939 },
+  EmojiRange { start: 0x1F93C, end: 0x1F93E },
+  EmojiRange { start: 0x1F977, end: 0x1F977 },
+  EmojiRange { start: 0x1F9B5, end: 0x1F9B6 },
+  EmojiRange { start: 0x1F9B8, end: 0x1F9B9 },
+  EmojiRange { start: 0x1F9BB, end: 0x1F9BB },
+  EmojiRange { start: 0x1F9CD, end: 0x1F9CF },
+  EmojiRange { start: 0x1F9D1, end: 0x1F9DD },
+  EmojiRange { start: 0x1FAC3, end: 0x1FAC5 },
+  EmojiRange { start: 0x1FAF0, end: 0x1FAF8 },
+];
+
 pub(crate) const EMOJI_COMPONENT_RANGES: &[EmojiRange] = &[
   EmojiRange { start: 0x0023, end: 0x0023 },
   EmojiRange { start: 0x002A, end: 0x002A },
@@ -271,6 +318,16 @@ pub(crate) fn is_emoji(cp: u32) -> bool {
 #[inline]
 pub(crate) fn is_emoji_presentation(cp: u32) -> bool {
   in_ranges(cp, EMOJI_PRESENTATION_RANGES)
+}
+
+#[inline]
+pub(crate) fn is_emoji_modifier(cp: u32) -> bool {
+  in_ranges(cp, EMOJI_MODIFIER_RANGES)
+}
+
+#[inline]
+pub(crate) fn is_emoji_modifier_base(cp: u32) -> bool {
+  in_ranges(cp, EMOJI_MODIFIER_BASE_RANGES)
 }
 
 #[inline]
