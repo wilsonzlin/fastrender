@@ -3285,7 +3285,7 @@ fn apply_primitive(
     )
     .map(|pixmap| FilterResult::full_region(pixmap, filter_region)),
     FilterPrimitive::GaussianBlur { input, std_dev } => {
-      let Some(mut img) = resolve_input(input, source, results, current, filter_region) else {
+      let Some(mut img) = resolve_input(input, source, results, current, filter_region)? else {
         return Ok(None);
       };
       let (sx, sy) = filter.resolve_primitive_pair(*std_dev, css_bbox);
@@ -3313,7 +3313,7 @@ fn apply_primitive(
     FilterPrimitive::Offset { input, dx, dy } => {
       let dx = filter.resolve_primitive_x(*dx, css_bbox) * scale_x;
       let dy = filter.resolve_primitive_y(*dy, css_bbox) * scale_y;
-      match resolve_input(input, source, results, current, filter_region) {
+      match resolve_input(input, source, results, current, filter_region)? {
         Some(img) => Some(offset_result(
           img,
           dx,
@@ -3325,7 +3325,7 @@ fn apply_primitive(
       }
     }
     FilterPrimitive::ColorMatrix { input, kind } => {
-      let Some(mut img) = resolve_input(input, source, results, current, filter_region) else {
+      let Some(mut img) = resolve_input(input, source, results, current, filter_region)? else {
         return Ok(None);
       };
       apply_color_matrix(&mut img.pixmap, kind, color_interpolation_filters)?;
@@ -3336,8 +3336,8 @@ fn apply_primitive(
       input2,
       operator,
     } => composite_pixmaps(
-      resolve_input(input1, source, results, current, filter_region),
-      resolve_input(input2, source, results, current, filter_region),
+      resolve_input(input1, source, results, current, filter_region)?,
+      resolve_input(input2, source, results, current, filter_region)?,
       *operator,
       color_interpolation_filters,
       filter_region,
@@ -3358,7 +3358,7 @@ fn apply_primitive(
       color,
       opacity,
     } => {
-      let Some(img) = resolve_input(input, source, results, current, filter_region) else {
+      let Some(img) = resolve_input(input, source, results, current, filter_region)? else {
         return Ok(None);
       };
       let dx = filter.resolve_primitive_x(*dx, css_bbox) * scale_x;
@@ -3383,14 +3383,14 @@ fn apply_primitive(
       input2,
       mode,
     } => blend_pixmaps(
-      resolve_input(input1, source, results, current, filter_region),
-      resolve_input(input2, source, results, current, filter_region),
+      resolve_input(input1, source, results, current, filter_region)?,
+      resolve_input(input2, source, results, current, filter_region)?,
       *mode,
       filter_region,
       color_interpolation_filters,
     )?,
     FilterPrimitive::Morphology { input, radius, op } => {
-      let Some(mut img) = resolve_input(input, source, results, current, filter_region) else {
+      let Some(mut img) = resolve_input(input, source, results, current, filter_region)? else {
         return Ok(None);
       };
       let radius = filter.resolve_primitive_pair(*radius, css_bbox);
@@ -3405,7 +3405,7 @@ fn apply_primitive(
       Some(img)
     }
     FilterPrimitive::ComponentTransfer { input, r, g, b, a } => {
-      let Some(mut img) = resolve_input(input, source, results, current, filter_region) else {
+      let Some(mut img) = resolve_input(input, source, results, current, filter_region)? else {
         return Ok(None);
       };
       apply_component_transfer(&mut img.pixmap, r, g, b, a, color_interpolation_filters)?;
@@ -3419,7 +3419,7 @@ fn apply_primitive(
       light,
       lighting_color,
     } => {
-      let Some(img) = resolve_input(input, source, results, current, filter_region) else {
+      let Some(img) = resolve_input(input, source, results, current, filter_region)? else {
         return Ok(None);
       };
       apply_diffuse_lighting(
@@ -3446,7 +3446,7 @@ fn apply_primitive(
       light,
       lighting_color,
     } => {
-      let Some(img) = resolve_input(input, source, results, current, filter_region) else {
+      let Some(img) = resolve_input(input, source, results, current, filter_region)? else {
         return Ok(None);
       };
       apply_specular_lighting(
@@ -3475,7 +3475,7 @@ fn apply_primitive(
       filter_region,
     ),
     FilterPrimitive::Tile { input } => {
-      let Some(img) = resolve_input(input, source, results, current, filter_region) else {
+      let Some(img) = resolve_input(input, source, results, current, filter_region)? else {
         return Ok(None);
       };
       tile_pixmap(img, filter_region)?
@@ -3510,10 +3510,10 @@ fn apply_primitive(
       x_channel,
       y_channel,
     } => {
-      let Some(primary) = resolve_input(in1, source, results, current, filter_region) else {
+      let Some(primary) = resolve_input(in1, source, results, current, filter_region)? else {
         return Ok(None);
       };
-      let Some(map) = resolve_input(in2, source, results, current, filter_region) else {
+      let Some(map) = resolve_input(in2, source, results, current, filter_region)? else {
         return Ok(None);
       };
       let scale = filter.resolve_primitive_scalar(*disp_scale, css_bbox) * scale_avg;
@@ -3544,7 +3544,7 @@ fn apply_primitive(
       preserve_alpha,
       subregion,
     } => {
-      let Some(img) = resolve_input(input, source, results, current, filter_region) else {
+      let Some(img) = resolve_input(input, source, results, current, filter_region)? else {
         return Ok(None);
       };
       let region = img.region;
@@ -3574,16 +3574,24 @@ fn resolve_input(
   results: &HashMap<String, FilterResult>,
   current: &FilterResult,
   _filter_region: Rect,
-) -> Option<FilterResult> {
-  match input {
+) -> RenderResult<Option<FilterResult>> {
+  let result = match input {
     FilterInput::SourceGraphic => Some(source.clone()),
     FilterInput::SourceAlpha => {
-      let mut mask = new_pixmap(source.pixmap.width(), source.pixmap.height())?;
-      for (dst, src) in mask
+      check_active(RenderStage::Paint)?;
+      let mut mask = match new_pixmap(source.pixmap.width(), source.pixmap.height()) {
+        Some(p) => p,
+        None => return Ok(None),
+      };
+      for (idx, (dst, src)) in mask
         .pixels_mut()
         .iter_mut()
         .zip(source.pixmap.pixels().iter())
+        .enumerate()
       {
+        if idx % FILTER_DEADLINE_STRIDE == 0 {
+          check_active(RenderStage::Paint)?;
+        }
         let alpha = src.alpha();
         *dst = PremultipliedColorU8::from_rgba(0, 0, 0, alpha)
           .unwrap_or(PremultipliedColorU8::TRANSPARENT);
@@ -3600,7 +3608,8 @@ fn resolve_input(
       .cloned()
       .or_else(|| transparent_result(source)),
     FilterInput::Previous => Some(current.clone()),
-  }
+  };
+  Ok(result)
 }
 
 fn render_fe_image(
@@ -4359,7 +4368,7 @@ fn merge_inputs(
   paint.blend_mode = tiny_skia::BlendMode::SourceOver;
 
   for input in inputs {
-    if let Some(img) = resolve_input(input, source, results, current, filter_region) {
+    if let Some(img) = resolve_input(input, source, results, current, filter_region)? {
       match color_interpolation_filters {
         ColorInterpolationFilters::SRGB => {
           out.draw_pixmap(
@@ -5669,6 +5678,7 @@ mod tests {
       &src,
       region,
     )
+    .unwrap()
     .expect("resolved SourceAlpha");
 
     let px = resolved.pixmap.pixels()[0];
@@ -5966,6 +5976,37 @@ mod tests {
     };
 
     let result = with_deadline(Some(&deadline), || apply_primitive_for_test(&prim, &pixmap));
+
+    assert!(
+      matches!(
+        result,
+        Err(RenderError::Timeout {
+          stage: RenderStage::Paint,
+          ..
+        })
+      ),
+      "expected timeout, got {result:?}"
+    );
+    assert!(calls.load(Ordering::SeqCst) >= 2);
+  }
+
+  #[test]
+  fn source_alpha_respects_cancel_callback() {
+    let (deadline, calls) = deadline_after_first_check();
+    let mut pixmap = new_pixmap(1, 1).unwrap();
+    pixmap.pixels_mut()[0] = ColorU8::from_rgba(200, 100, 50, 128).premultiply();
+    let region = filter_region_for_pixmap(&pixmap);
+    let src = FilterResult::full_region(pixmap, region);
+
+    let result = with_deadline(Some(&deadline), || {
+      resolve_input(
+        &FilterInput::SourceAlpha,
+        &src,
+        &HashMap::new(),
+        &src,
+        region,
+      )
+    });
 
     assert!(
       matches!(

@@ -9640,6 +9640,7 @@ mod tests {
       id: None,
       data,
       index: 0,
+      face_metrics_overrides: crate::text::font_db::FontFaceMetricsOverrides::default(),
       family: "DejaVu Sans Subset".to_string(),
       weight: crate::text::font_db::FontWeight::NORMAL,
       style: FontStyle::Normal,
