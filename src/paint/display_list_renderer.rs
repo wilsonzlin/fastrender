@@ -4625,52 +4625,59 @@ impl DisplayListRenderer {
       self.canvas.width() as f32 / self.scale,
       self.canvas.height() as f32 / self.scale,
     ));
-
     let rects = mask.rects;
     let mut combined: Option<CompositeMask> = None;
-    // `ResolvedMask` geometry is expressed in element CSS coordinates. Under parallel tiling and
-    // bounded layers the canvas is translated so pixmap coordinates no longer map 1:1 to element
-    // coordinates. Compute the visible element-space rect by inverting the current canvas
-    // transform so we can clip/size mask rasterization correctly.
-    let canvas_bounds_device = self.canvas.bounds();
-    let canvas_clip_device = self.canvas.clip_bounds().unwrap_or(canvas_bounds_device);
-    let canvas_transform = self.canvas.transform();
-    let is_translation_only = {
-      const EPS: f32 = 1e-6;
-      (canvas_transform.sx - 1.0).abs() < EPS
-        && (canvas_transform.sy - 1.0).abs() < EPS
-        && canvas_transform.kx.abs() < EPS
-        && canvas_transform.ky.abs() < EPS
+    let transform = self.canvas.transform();
+    let inv_transform =
+      (transform == Transform::identity()).then_some(Transform::identity()).or_else(|| {
+        // `render_mask` needs to clip mask rasterization to the visible canvas region. Mask
+        // reference rectangles are expressed in global CSS coordinates, while the underlying
+        // canvas pixmap is always rooted at (0,0) in *pixmap* space. When the canvas has a
+        // translation (parallel tiling or bounded layers), we must map the pixmap bounds back into
+        // CSS space to intersect correctly.
+        invert_transform(transform)
+      });
+
+    let (canvas_bounds_css, canvas_clip_bounds_css) = if let Some(inv) = inv_transform {
+      let bounds_device = transform_rect(self.canvas.bounds(), &inv);
+      let bounds_css = Rect::from_xywh(
+        bounds_device.x() / self.scale,
+        bounds_device.y() / self.scale,
+        bounds_device.width() / self.scale,
+        bounds_device.height() / self.scale,
+      );
+      let clip_css = self
+        .canvas
+        .clip_bounds()
+        .map(|rect| {
+          let clip_device = transform_rect(rect, &inv);
+          Rect::from_xywh(
+            clip_device.x() / self.scale,
+            clip_device.y() / self.scale,
+            clip_device.width() / self.scale,
+            clip_device.height() / self.scale,
+          )
+        })
+        .unwrap_or(bounds_css);
+      (bounds_css, clip_css)
+    } else {
+      // Non-invertible transforms can't be mapped back into CSS space; fall back to the legacy
+      // origin-at-(0,0) behavior rather than allocating an unbounded mask.
+      let bounds_css = Rect::from_xywh(0.0, 0.0, viewport.0, viewport.1);
+      let clip_css = self
+        .canvas
+        .clip_bounds()
+        .map(|rect| {
+          Rect::from_xywh(
+            rect.x() / self.scale,
+            rect.y() / self.scale,
+            rect.width() / self.scale,
+            rect.height() / self.scale,
+          )
+        })
+        .unwrap_or(bounds_css);
+      (bounds_css, clip_css)
     };
-    let (canvas_bounds_local_device, canvas_clip_local_device) =
-      if canvas_transform == Transform::identity() {
-        (canvas_bounds_device, canvas_clip_device)
-      } else if let Some(inv) = invert_transform(canvas_transform) {
-        (
-          transform_rect(canvas_bounds_device, &inv),
-          transform_rect(canvas_clip_device, &inv),
-        )
-      } else {
-        // Non-invertible transforms are exceedingly rare; fall back to the pre-translation behavior.
-        (canvas_bounds_device, canvas_clip_device)
-      };
-    let canvas_bounds_css = Rect::from_xywh(
-      canvas_bounds_local_device.x() / self.scale,
-      canvas_bounds_local_device.y() / self.scale,
-      canvas_bounds_local_device.width() / self.scale,
-      canvas_bounds_local_device.height() / self.scale,
-    );
-    let canvas_clip_bounds_css = Rect::from_xywh(
-      canvas_clip_local_device.x() / self.scale,
-      canvas_clip_local_device.y() / self.scale,
-      canvas_clip_local_device.width() / self.scale,
-      canvas_clip_local_device.height() / self.scale,
-    );
-    let visible_local_device = canvas_bounds_local_device
-      .intersection(canvas_clip_local_device)
-      .unwrap_or(Rect::ZERO);
-    let (visible_local_x0, visible_local_y0, visible_local_x1, visible_local_y1) =
-      rect_int_bounds(&visible_local_device);
 
     for layer in mask.layers.iter().rev() {
       let origin_rect_css = match layer.origin {
@@ -4902,20 +4909,41 @@ impl DisplayListRenderer {
           converted_tile.as_ref().unwrap()
         }
       };
- 
-      // Allocate and paint only the portion of the mask that overlaps the visible canvas bounds in
-      // *element/device* space. Under tiling and bounded layers the canvas is translated, so the
-      // visible rect might not start at (0,0).
-      let mut x0 = (clip_rect_css.min_x() * self.scale).floor() as i32;
-      let mut y0 = (clip_rect_css.min_y() * self.scale).floor() as i32;
-      let mut x1 = (clip_rect_css.max_x() * self.scale).ceil() as i32;
-      let mut y1 = (clip_rect_css.max_y() * self.scale).ceil() as i32;
-      x0 = x0.clamp(visible_local_x0, visible_local_x1);
-      y0 = y0.clamp(visible_local_y0, visible_local_y1);
-      x1 = x1.clamp(visible_local_x0, visible_local_x1);
-      y1 = y1.clamp(visible_local_y0, visible_local_y1);
-      let region_w = x1.saturating_sub(x0) as u32;
-      let region_h = y1.saturating_sub(y0) as u32;
+
+      // `clip_rect_css` is expressed in global CSS coordinates. Convert it into device space and
+      // then through the current canvas transform so we allocate the mask in the correct pixmap
+      // coordinate space (tile-local, bounded-layer-local, etc.).
+      let device_x0 = (clip_rect_css.min_x() * self.scale).floor() as i32;
+      let device_y0 = (clip_rect_css.min_y() * self.scale).floor() as i32;
+      let device_x1 = (clip_rect_css.max_x() * self.scale).ceil() as i32;
+      let device_y1 = (clip_rect_css.max_y() * self.scale).ceil() as i32;
+      let device_w = device_x1.saturating_sub(device_x0);
+      let device_h = device_y1.saturating_sub(device_y0);
+
+      let device_rect = Rect::from_xywh(
+        device_x0 as f32,
+        device_y0 as f32,
+        device_w as f32,
+        device_h as f32,
+      );
+      let pixmap_rect = if transform == Transform::identity() {
+        device_rect
+      } else {
+        transform_rect(device_rect, &transform)
+      };
+
+      let canvas_w = self.canvas.width() as i32;
+      let canvas_h = self.canvas.height() as i32;
+      let mut pix_x0 = pixmap_rect.min_x().floor() as i32;
+      let mut pix_y0 = pixmap_rect.min_y().floor() as i32;
+      let mut pix_x1 = pixmap_rect.max_x().ceil() as i32;
+      let mut pix_y1 = pixmap_rect.max_y().ceil() as i32;
+      pix_x0 = pix_x0.clamp(0, canvas_w);
+      pix_y0 = pix_y0.clamp(0, canvas_h);
+      pix_x1 = pix_x1.clamp(0, canvas_w);
+      pix_y1 = pix_y1.clamp(0, canvas_h);
+      let region_w = pix_x1.saturating_sub(pix_x0) as u32;
+      let region_h = pix_y1.saturating_sub(pix_y0) as u32;
       if region_w == 0 || region_h == 0 {
         combined = Some(match combined.take() {
           Some(existing) => {
@@ -4928,6 +4956,21 @@ impl DisplayListRenderer {
         });
         continue;
       }
+
+      // `paint_mask_tile` draws into a standalone pixmap and expects the destination origin in
+      // *device* coordinates (CSS * scale). The `OffsetMask` origin we return must be in the
+      // *parent pixmap* coordinate space so it lines up with `Canvas::pop_layer_raw` origins.
+      let dest_origin_device = if transform == Transform::identity() {
+        (pix_x0, pix_y0)
+      } else if let Some(inv) = inv_transform {
+        let x = pix_x0 as f32;
+        let y = pix_y0 as f32;
+        let dx = x * inv.sx + y * inv.kx + inv.tx;
+        let dy = x * inv.ky + y * inv.sy + inv.ty;
+        (dx.round() as i32, dy.round() as i32)
+      } else {
+        (device_x0, device_y0)
+      };
 
       let wants_reuse =
         reusable_mask.is_some() && matches!(combined, None | Some(CompositeMask::Transparent));
@@ -4973,7 +5016,7 @@ impl DisplayListRenderer {
             tile_h,
             clip_rect_css,
             self.scale,
-            (x0, y0),
+            dest_origin_device,
           );
         } else {
           for ty in positions_y.iter() {
@@ -4988,7 +5031,7 @@ impl DisplayListRenderer {
                 tile_h,
                 clip_rect_css,
                 self.scale,
-                (x0, y0),
+                dest_origin_device,
               );
             }
           }
@@ -5009,22 +5052,7 @@ impl DisplayListRenderer {
 
       let layer_mask = CompositeMask::Region(OffsetMask {
         mask: layer_mask,
-        // `apply_mask_with_offset` expects mask coordinates in the same device-space coordinate
-        // system as the layer origin returned by `Canvas::pop_layer_raw`. When the canvas is
-        // translated (parallel tiling / bounded layers), pixmap coordinates are offset relative to
-        // the element's local device coordinates, so we need to apply the translation here.
-        //
-        // Note: For now we only remap translation-only transforms; that covers the tile/bounded
-        // layer cases. More complex affine transforms would require warping the mask itself, not
-        // just offsetting its origin.
-        origin: if is_translation_only {
-          (
-            x0.saturating_add(canvas_transform.tx.round() as i32),
-            y0.saturating_add(canvas_transform.ty.round() as i32),
-          )
-        } else {
-          (x0, y0)
-        },
+        origin: (pix_x0, pix_y0),
       });
 
       combined = Some(match combined.take() {
@@ -14131,6 +14159,182 @@ mod tests {
     assert_eq!(rendered.origin, (50, 60));
     assert_eq!(rendered.mask.width(), 10);
     assert_eq!(rendered.mask.height(), 10);
+  }
+
+  #[test]
+  fn render_mask_respects_canvas_translation() {
+    let mut renderer = DisplayListRenderer::new(10, 10, Rgba::WHITE, FontContext::new()).unwrap();
+    renderer.canvas.translate(-50.0, -60.0);
+
+    // The clip rect is in *global* CSS coordinates; it only becomes visible once the canvas has
+    // been translated.
+    let bounds = Rect::from_xywh(52.0, 63.0, 4.0, 4.0);
+    let mut layer = MaskLayer::default();
+    layer.repeat = BackgroundRepeat::no_repeat();
+    layer.size = BackgroundSize::Explicit(
+      BackgroundSizeComponent::Length(Length::percent(100.0)),
+      BackgroundSizeComponent::Length(Length::percent(100.0)),
+    );
+
+    let image = ImageData::new_pixels(1, 1, vec![0, 0, 0, 255]);
+    let mask = ResolvedMask {
+      layers: vec![ResolvedMaskLayer {
+        image: ResolvedMaskImage::Raster(image),
+        repeat: layer.repeat,
+        position: layer.position,
+        size: layer.size,
+        origin: layer.origin,
+        clip: layer.clip,
+        mode: layer.mode,
+        composite: layer.composite,
+      }],
+      color: Rgba::BLACK,
+      font_size: 16.0,
+      root_font_size: 16.0,
+      viewport: None,
+      rects: mask_rects(bounds, (0.0, 0.0, 0.0, 0.0)),
+    };
+
+    let rendered = renderer
+      .render_mask(&mask)
+      .expect("mask render ok")
+      .expect("mask rendered");
+
+    // Global device origin (52,63) maps to local pixmap origin (2,3) under the translation.
+    assert_eq!(rendered.origin, (2, 3));
+    assert_eq!(rendered.mask.width(), 4);
+    assert_eq!(rendered.mask.height(), 4);
+  }
+
+  #[test]
+  fn render_mask_respects_bounded_layer_translation() {
+    let mut renderer =
+      DisplayListRenderer::new(100, 100, Rgba::WHITE, FontContext::new()).unwrap();
+    renderer
+      .canvas
+      .push_layer_bounded(1.0, None, Rect::from_xywh(50.0, 60.0, 10.0, 10.0))
+      .unwrap();
+
+    let bounds = Rect::from_xywh(52.0, 63.0, 4.0, 4.0);
+    let mut layer = MaskLayer::default();
+    layer.repeat = BackgroundRepeat::no_repeat();
+    layer.size = BackgroundSize::Explicit(
+      BackgroundSizeComponent::Length(Length::percent(100.0)),
+      BackgroundSizeComponent::Length(Length::percent(100.0)),
+    );
+
+    let image = ImageData::new_pixels(1, 1, vec![0, 0, 0, 255]);
+    let mask = ResolvedMask {
+      layers: vec![ResolvedMaskLayer {
+        image: ResolvedMaskImage::Raster(image),
+        repeat: layer.repeat,
+        position: layer.position,
+        size: layer.size,
+        origin: layer.origin,
+        clip: layer.clip,
+        mode: layer.mode,
+        composite: layer.composite,
+      }],
+      color: Rgba::BLACK,
+      font_size: 16.0,
+      root_font_size: 16.0,
+      viewport: None,
+      rects: mask_rects(bounds, (0.0, 0.0, 0.0, 0.0)),
+    };
+
+    let rendered = renderer
+      .render_mask(&mask)
+      .expect("mask render ok")
+      .expect("mask rendered");
+
+    assert_eq!(rendered.origin, (2, 3));
+    assert_eq!(rendered.mask.width(), 4);
+    assert_eq!(rendered.mask.height(), 4);
+  }
+
+  #[test]
+  fn render_mask_aligns_with_bounded_layer_in_translated_canvas() {
+    use crate::paint::canvas::apply_mask_with_offset;
+    use tiny_skia::BlendMode as SkiaBlendMode;
+
+    // Mimic the tile renderer case: a small pixmap with a translation so that global coordinates
+    // map into a local render region.
+    let mut renderer = DisplayListRenderer::new(40, 40, Rgba::WHITE, FontContext::new()).unwrap();
+    renderer.canvas.translate(-60.0, -60.0);
+
+    // Create a bounded layer matching the stacking context bounds after the translation has been
+    // applied (global 70..90 => local 10..30).
+    renderer
+      .canvas
+      .push_layer_bounded(
+        1.0,
+        Some(SkiaBlendMode::SourceOver),
+        Rect::from_xywh(10.0, 10.0, 20.0, 20.0),
+      )
+      .unwrap();
+    renderer
+      .canvas
+      .draw_rect(Rect::from_xywh(70.0, 70.0, 20.0, 20.0), Rgba::new(30, 160, 220, 1.0));
+
+    let (mut layer, layer_origin, _opacity, _blend) = renderer.canvas.pop_layer_raw().unwrap();
+    assert_eq!(layer_origin, (10, 10));
+
+    let bounds = Rect::from_xywh(70.0, 70.0, 20.0, 20.0);
+    let mut layer_style = MaskLayer::default();
+    layer_style.repeat = BackgroundRepeat::no_repeat();
+    layer_style.size = BackgroundSize::Explicit(
+      BackgroundSizeComponent::Length(Length::percent(100.0)),
+      BackgroundSizeComponent::Length(Length::percent(100.0)),
+    );
+
+    let image = ImageData::new_pixels(1, 1, vec![0, 0, 0, 255]);
+    let mask = ResolvedMask {
+      layers: vec![ResolvedMaskLayer {
+        image: ResolvedMaskImage::Raster(image),
+        repeat: layer_style.repeat,
+        position: layer_style.position,
+        size: layer_style.size,
+        origin: layer_style.origin,
+        clip: layer_style.clip,
+        mode: layer_style.mode,
+        composite: layer_style.composite,
+      }],
+      color: Rgba::BLACK,
+      font_size: 16.0,
+      root_font_size: 16.0,
+      viewport: None,
+      rects: mask_rects(bounds, (0.0, 0.0, 0.0, 0.0)),
+    };
+
+    let rendered = renderer
+      .render_mask(&mask)
+      .expect("mask render ok")
+      .expect("mask rendered");
+
+    // Under a -60px translation, the global (70,70) device origin maps to local pixmap (10,10).
+    assert_eq!(rendered.origin, (10, 10));
+    assert_eq!(rendered.mask.width(), 20);
+    assert_eq!(rendered.mask.height(), 20);
+
+    let applied =
+      apply_mask_with_offset(&mut layer, layer_origin, &rendered.mask, rendered.origin).unwrap();
+    assert!(applied, "expected the mask to overlap the bounded layer");
+
+    assert_eq!(
+      pixel(&layer, 0, 0),
+      (30, 160, 220, 255),
+      "expected mask alpha=1.0 to preserve painted pixels"
+    );
+
+    renderer
+      .canvas
+      .composite_layer(&layer, 1.0, Some(SkiaBlendMode::SourceOver), layer_origin);
+    let pixmap = renderer.canvas.into_pixmap();
+    assert_eq!(
+      pixel(&pixmap, 10, 10),
+      (30, 160, 220, 255),
+      "expected compositing into a translated parent canvas to keep the painted location stable"
+    );
   }
 
   #[test]

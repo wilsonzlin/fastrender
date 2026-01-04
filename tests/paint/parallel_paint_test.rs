@@ -187,6 +187,119 @@ fn parallel_paint_matches_serial_output() {
 }
 
 #[test]
+fn mask_parallel_paint_matches_serial_output() {
+  let mut list = DisplayList::new();
+  list.push(DisplayItem::FillRect(FillRectItem {
+    rect: Rect::from_xywh(0.0, 0.0, 128.0, 128.0),
+    color: Rgba::WHITE,
+  }));
+
+  // Keep the masked element well inside a single tile so serial/parallel outputs should be
+  // byte-identical once mask translation is handled correctly.
+  let bounds = Rect::from_xywh(70.0, 70.0, 20.0, 20.0);
+  let mut layer = MaskLayer::default();
+  layer.repeat = BackgroundRepeat::no_repeat();
+  layer.size = BackgroundSize::Explicit(
+    BackgroundSizeComponent::Length(Length::percent(100.0)),
+    BackgroundSizeComponent::Length(Length::percent(100.0)),
+  );
+
+  let image = ImageData::new_pixels(1, 1, vec![0, 0, 0, 255]);
+  let mask = ResolvedMask {
+    layers: vec![ResolvedMaskLayer {
+      image: ResolvedMaskImage::Raster(image),
+      repeat: layer.repeat,
+      position: layer.position,
+      size: layer.size,
+      origin: layer.origin,
+      clip: layer.clip,
+      mode: layer.mode,
+      composite: layer.composite,
+    }],
+    color: Rgba::BLACK,
+    font_size: 16.0,
+    root_font_size: 16.0,
+    viewport: None,
+    rects: MaskReferenceRects {
+      border: bounds,
+      padding: bounds,
+      content: bounds,
+    },
+  };
+
+  let stacking = StackingContextItem {
+    z_index: 0,
+    creates_stacking_context: true,
+    bounds,
+    plane_rect: bounds,
+    mix_blend_mode: BlendMode::Normal,
+    is_isolated: true,
+    transform: None,
+    child_perspective: None,
+    transform_style: TransformStyle::Flat,
+    backface_visibility: BackfaceVisibility::Visible,
+    filters: Vec::new(),
+    backdrop_filters: Vec::new(),
+    radii: BorderRadii::ZERO,
+    mask: Some(mask),
+  };
+
+  list.push(DisplayItem::PushStackingContext(stacking));
+  list.push(DisplayItem::FillRect(FillRectItem {
+    rect: bounds,
+    color: Rgba::new(30, 160, 220, 1.0),
+  }));
+  list.push(DisplayItem::PopStackingContext);
+
+  let font_ctx = FontContext::new();
+  let serial = DisplayListRenderer::new(128, 128, Rgba::WHITE, font_ctx.clone())
+    .unwrap()
+    .with_parallelism(PaintParallelism::disabled())
+    .render(&list)
+    .expect("serial paint");
+
+  let parallelism = PaintParallelism {
+    tile_size: 32,
+    log_timing: false,
+    min_display_items: 1,
+    min_tiles: 1,
+    min_build_fragments: 1,
+    build_chunk_size: 1,
+    ..PaintParallelism::enabled()
+  };
+  let pool = ThreadPoolBuilder::new().num_threads(4).build().unwrap();
+  let report = pool.install(|| {
+    DisplayListRenderer::new(128, 128, Rgba::WHITE, font_ctx)
+      .unwrap()
+      .with_parallelism(parallelism)
+      .render_with_report(&list)
+      .expect("parallel paint")
+  });
+
+  assert!(report.parallel_used, "expected tiling to be used");
+  let serial_data = serial.data();
+  let parallel_data = report.pixmap.data();
+  if serial_data != parallel_data {
+    let mut first = None;
+    let mut diff = 0usize;
+    for (idx, (&a, &b)) in serial_data.iter().zip(parallel_data.iter()).enumerate() {
+      if a != b {
+        diff += 1;
+        if first.is_none() {
+          let pixel = idx / 4;
+          let x = pixel % 128;
+          let y = pixel / 128;
+          first = Some((idx, x, y, a, b));
+        }
+      }
+    }
+    panic!(
+      "parallel output differs from serial: diff_bytes={diff} first_mismatch={first:?}"
+    );
+  }
+}
+
+#[test]
 fn thick_strokes_survive_tiling() {
   let mut list = DisplayList::new();
   list.push(DisplayItem::FillRect(FillRectItem {
