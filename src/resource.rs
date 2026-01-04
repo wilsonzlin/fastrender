@@ -1954,6 +1954,29 @@ pub fn strict_mime_checks_enabled() -> bool {
   runtime::runtime_toggles().truthy_with_default("FASTR_FETCH_STRICT_MIME", true)
 }
 
+fn cors_origin_key_from_referrer(referrer: Option<&str>) -> Option<String> {
+  let referrer = referrer?;
+  match Url::parse(referrer) {
+    Ok(parsed) => match parsed.scheme() {
+      "http" | "https" => http_browser_origin_and_referer_for_url(&parsed).map(|(origin, _)| origin),
+      _ => Some("null".to_string()),
+    },
+    Err(_) => http_browser_tolerant_origin_from_url(referrer).and_then(|origin| {
+      http_browser_origin_and_referer_for_origin(&origin).map(|(origin, _)| origin)
+    }),
+  }
+}
+
+fn cors_cache_partition_key(req: &FetchRequest<'_>) -> Option<String> {
+  if !cors_enforcement_enabled() {
+    return None;
+  }
+  if req.destination.sec_fetch_mode() != "cors" {
+    return None;
+  }
+  cors_origin_key_from_referrer(req.referrer)
+}
+
 fn response_final_url(resource: &FetchedResource, requested_url: &str) -> String {
   resource
     .final_url
@@ -6106,6 +6129,7 @@ fn reserve_policy_bytes(policy: &Option<ResourcePolicy>, resource: &FetchedResou
 struct CacheKey {
   kind: FetchContextKind,
   url: String,
+  origin_key: Option<String>,
 }
 
 impl CacheKey {
@@ -6113,6 +6137,27 @@ impl CacheKey {
     Self {
       kind,
       url: url.into(),
+      origin_key: None,
+    }
+  }
+
+  fn new_with_origin(
+    kind: FetchContextKind,
+    url: impl Into<String>,
+    origin_key: Option<String>,
+  ) -> Self {
+    Self {
+      kind,
+      url: url.into(),
+      origin_key,
+    }
+  }
+
+  fn with_url(&self, url: impl Into<String>) -> Self {
+    Self {
+      kind: self.kind,
+      url: url.into(),
+      origin_key: self.origin_key.clone(),
     }
   }
 }
@@ -6552,7 +6597,7 @@ impl<F: ResourceFetcher> CachingFetcher<F> {
     final_url: Option<&str>,
   ) -> CacheKey {
     let canonical_url = self.canonical_url(&requested.url, final_url);
-    let canonical = CacheKey::new(requested.kind, canonical_url.clone());
+    let canonical = requested.with_url(canonical_url.clone());
 
     if self.config.max_bytes > 0 && entry.weight() > self.config.max_bytes {
       return canonical;
@@ -7029,7 +7074,7 @@ impl<F: ResourceFetcher> ResourceFetcher for CachingFetcher<F> {
       policy.ensure_url_allowed(url)?;
     }
 
-    let key = CacheKey::new(kind, url.to_string());
+    let key = CacheKey::new_with_origin(kind, url.to_string(), cors_cache_partition_key(&req));
     let cached = self.cached_entry(&key);
     let plan = self.plan_cache_use(url, cached.clone(), None);
     if let CacheAction::UseCached = plan.action {
