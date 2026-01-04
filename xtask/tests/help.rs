@@ -58,6 +58,41 @@ fn chrome_baseline_fixtures_help_mentions_flags() {
 }
 
 #[test]
+fn fixture_chrome_diff_help_mentions_flags() {
+  let output = Command::new(env!("CARGO_BIN_EXE_xtask"))
+    .args(["fixture-chrome-diff", "--help"])
+    .output()
+    .expect("run cargo xtask fixture-chrome-diff --help");
+
+  assert!(
+    output.status.success(),
+    "fixture-chrome-diff help should exit successfully"
+  );
+
+  let stdout = String::from_utf8_lossy(&output.stdout);
+  assert!(
+    stdout.contains("--fixtures-dir")
+      && stdout.contains("--out-dir")
+      && stdout.contains("--fixtures")
+      && stdout.contains("--shard")
+      && stdout.contains("--viewport")
+      && stdout.contains("--dpr")
+      && stdout.contains("--media")
+      && stdout.contains("--timeout")
+      && stdout.contains("--js")
+      && stdout.contains("--tolerance")
+      && stdout.contains("--max-diff-percent")
+      && stdout.contains("--max-perceptual-distance")
+      && stdout.contains("--sort-by")
+      && stdout.contains("--ignore-alpha")
+      && stdout.contains("--chrome")
+      && stdout.contains("--chrome-dir")
+      && stdout.contains("--no-chrome"),
+    "help output should mention key flags; got:\n{stdout}"
+  );
+}
+
+#[test]
 fn pageset_help_mentions_disk_cache_flag() {
   let output = Command::new(env!("CARGO_BIN_EXE_xtask"))
     .args(["pageset", "--help"])
