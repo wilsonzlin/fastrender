@@ -490,6 +490,10 @@ fn record_filter_cache_miss() {
   with_paint_diagnostics(|diag| diag.filter_cache_misses += 1);
 }
 
+fn record_svg_filter_recursion_limit_hit() {
+  with_paint_diagnostics(|diag| diag.svg_filter_recursion_limit_hits += 1);
+}
+
 fn svg_filter_weight_bytes(filter: &SvgFilter, fetched_svg_bytes: usize) -> usize {
   let mut weight = fetched_svg_bytes.saturating_add(std::mem::size_of::<SvgFilter>());
 
@@ -2718,6 +2722,7 @@ pub(crate) fn apply_svg_filter_with_cache(
   mut blur_cache: Option<&mut (dyn BlurCacheOps + 'static)>,
 ) -> RenderResult<()> {
   let Some(_depth) = svg_filter_depth_guard() else {
+    record_svg_filter_recursion_limit_hit();
     return Ok(());
   };
   let scale = if scale.is_finite() && scale > 0.0 {
@@ -5374,6 +5379,7 @@ fn apply_color_matrix_values(
 mod tests {
   use super::*;
   use crate::api::ResourceContext;
+  use crate::paint::painter::{enable_paint_diagnostics, take_paint_diagnostics};
   use crate::render_control::{with_deadline, RenderDeadline};
   use crate::resource::{FetchDestination, FetchedResource, ResourceFetcher};
   use std::collections::HashMap;
@@ -5518,15 +5524,23 @@ mod tests {
 
   #[test]
   fn svg_filter_recursion_limit_is_noop() {
-    struct ResetDepth;
+    enable_paint_diagnostics();
+    struct ResetDepth {
+      diagnostics_taken: bool,
+    }
 
     impl Drop for ResetDepth {
       fn drop(&mut self) {
         SVG_FILTER_DEPTH.with(|cell| cell.set(0));
+        if !self.diagnostics_taken {
+          let _ = take_paint_diagnostics();
+        }
       }
     }
 
-    let _reset = ResetDepth;
+    let mut _reset = ResetDepth {
+      diagnostics_taken: false,
+    };
     SVG_FILTER_DEPTH.with(|cell| {
       assert_eq!(cell.get(), 0, "expected svg filter recursion depth to start at 0");
       cell.set(MAX_SVG_FILTER_DEPTH);
@@ -5563,6 +5577,9 @@ mod tests {
       "expected recursion limit to noop, got {result:?}"
     );
     assert_eq!(pixmap.data(), before.as_slice());
+    let stats = take_paint_diagnostics().expect("diagnostics enabled");
+    _reset.diagnostics_taken = true;
+    assert_eq!(stats.svg_filter_recursion_limit_hits, 1);
     assert_eq!(
       SVG_FILTER_DEPTH.with(|cell| cell.get()),
       MAX_SVG_FILTER_DEPTH

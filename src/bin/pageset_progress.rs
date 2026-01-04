@@ -4668,6 +4668,11 @@ fn paint_summary(paint: &PaintDiagnostics) -> Option<String> {
   push_opt_ms(&mut parts, "serial", paint.serial_ms);
   push_opt_usize(&mut parts, "filter_cache_hits", paint.filter_cache_hits);
   push_opt_usize(&mut parts, "filter_cache_misses", paint.filter_cache_misses);
+  push_opt_usize(
+    &mut parts,
+    "svg_filter_recursion_limit_hits",
+    paint.svg_filter_recursion_limit_hits,
+  );
   push_opt_usize(&mut parts, "blur_cache_hits", paint.blur_cache_hits);
   push_opt_usize(&mut parts, "blur_cache_misses", paint.blur_cache_misses);
   push_opt_usize(&mut parts, "blur_tiles", paint.blur_tiles);

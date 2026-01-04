@@ -2295,6 +2295,8 @@ pub struct PaintDiagnostics {
   pub serial_ms: Option<f64>,
   pub filter_cache_hits: Option<usize>,
   pub filter_cache_misses: Option<usize>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub svg_filter_recursion_limit_hits: Option<usize>,
   pub blur_cache_hits: Option<usize>,
   pub blur_cache_misses: Option<usize>,
   pub blur_tiles: Option<usize>,
@@ -5045,6 +5047,10 @@ impl FastRender {
           rec.stats.paint.serial_ms = Some(diag.serial_ms);
           rec.stats.paint.filter_cache_hits = Some(diag.filter_cache_hits);
           rec.stats.paint.filter_cache_misses = Some(diag.filter_cache_misses);
+          if diag.svg_filter_recursion_limit_hits > 0 {
+            rec.stats.paint.svg_filter_recursion_limit_hits =
+              Some(diag.svg_filter_recursion_limit_hits);
+          }
           rec.stats.paint.blur_cache_hits = Some(diag.blur_cache_hits);
           rec.stats.paint.blur_cache_misses = Some(diag.blur_cache_misses);
           rec.stats.paint.blur_tiles = Some(diag.blur_tiles);

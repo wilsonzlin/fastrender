@@ -297,6 +297,7 @@ pub struct PaintDiagnosticsSummary {
   pub serial_ms: f64,
   pub filter_cache_hits: usize,
   pub filter_cache_misses: usize,
+  pub svg_filter_recursion_limit_hits: usize,
   pub blur_cache_hits: usize,
   pub blur_cache_misses: usize,
   pub blur_tiles: usize,
