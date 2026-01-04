@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -53,6 +54,11 @@ struct StoredMetadataLite {
   content_type: Option<String>,
   #[serde(default)]
   error: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct StoredAliasLite {
+  target: String,
 }
 
 fn normalized_mime(content_type: &str) -> String {
@@ -166,6 +172,7 @@ pub fn audit_disk_cache_dir(
   };
 
   let mut meta_paths: Vec<PathBuf> = Vec::new();
+  let mut alias_paths: Vec<PathBuf> = Vec::new();
   for entry in dir {
     let entry = match entry {
       Ok(entry) => entry,
@@ -182,13 +189,17 @@ pub fn audit_disk_cache_dir(
     let name = name.to_string_lossy();
     if name.ends_with(META_SUFFIX) {
       meta_paths.push(entry.path());
+    } else if name.ends_with(".alias") {
+      alias_paths.push(entry.path());
     }
   }
   meta_paths.sort();
+  alias_paths.sort();
 
   let mut http_error_urls: HashMap<String, usize> = HashMap::new();
   let mut html_subresource_urls: HashMap<String, usize> = HashMap::new();
   let mut error_field_urls: HashMap<String, usize> = HashMap::new();
+  let mut deleted_entry_urls: HashSet<String> = HashSet::new();
 
   for meta_path in meta_paths {
     report.entries_scanned += 1;
@@ -256,6 +267,26 @@ pub fn audit_disk_cache_dir(
     report.deleted_bin_files += remove_file_if_present(&data_path);
     report.deleted_meta_files += remove_file_if_present(&meta_path);
     report.deleted_alias_files += remove_file_if_present(&alias_path);
+    deleted_entry_urls.insert(meta.url);
+  }
+
+  // Best-effort cleanup for alias files that redirect to a deleted URL.
+  //
+  // Alias filenames are derived from hashing the *alias URL* (plus kind + namespace), so we cannot
+  // reliably compute which alias files correspond to a deleted entry without parsing the alias file
+  // contents. This scan is still a single-level, deterministic iteration.
+  if !deleted_entry_urls.is_empty() {
+    for alias_path in alias_paths {
+      let Ok(bytes) = fs::read(&alias_path) else {
+        continue;
+      };
+      let Ok(alias) = serde_json::from_slice::<StoredAliasLite>(&bytes) else {
+        continue;
+      };
+      if deleted_entry_urls.contains(&alias.target) {
+        report.deleted_alias_files += remove_file_if_present(&alias_path);
+      }
+    }
   }
 
   report.top_http_error_urls = top_urls(http_error_urls, options.top_n);
@@ -297,6 +328,14 @@ mod tests {
       r#"{"url":"https://example.com/image.png","status":null,"content_type":"image/png","stored_at":1,"len":0,"error":"network error"}"#,
     );
 
+    // Alias entries are keyed by the alias URL hash, so create a synthetic alias file that points
+    // at the soon-to-be-deleted CSS URL to validate best-effort alias cleanup.
+    fs::write(
+      dir.join("redirect.alias"),
+      br#"{"target":"https://example.com/style.css"}"#,
+    )
+    .unwrap();
+
     let opts = DiskCacheAuditOptions {
       delete_http_errors: false,
       delete_html_subresources: false,
@@ -328,6 +367,10 @@ mod tests {
     assert!(!dir.join("b.bin").exists());
     assert!(!dir.join("b.bin.meta").exists());
     assert!(!dir.join("b.alias").exists());
+    assert!(
+      !dir.join("redirect.alias").exists(),
+      "expected alias files pointing at deleted entries to be removed"
+    );
 
     assert!(dir.join("c.bin").exists());
     assert!(dir.join("c.bin.meta").exists());
