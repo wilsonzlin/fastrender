@@ -4513,6 +4513,7 @@ mod tests {
   use crate::css::types::CssImportLoader;
   use crate::css::types::FontFaceStyle;
   use crate::css::types::FontSourceFormat;
+  use crate::style::color::{Color as CssColor, Rgba};
   use crate::style::custom_properties::CustomPropertyRegistry;
   use crate::style::custom_properties::PropertyRule as RegisteredPropertyRule;
   use crate::style::values::{CustomPropertyTypedValue, Length};
@@ -5819,4 +5820,60 @@ mod tests {
       Some(CustomPropertyTypedValue::Percentage(0.0))
     );
   }
-}
+
+  #[test]
+  fn property_rule_length_accepts_unitless_zero_initial_value() {
+    let css = r#"@property --l0 { syntax:"<length>"; inherits:false; initial-value:0 }"#;
+    let sheet = parse_stylesheet(css).expect("parse stylesheet");
+    let media_ctx = crate::style::media::MediaContext::screen(800.0, 600.0);
+    let collected = sheet.collect_property_rules(&media_ctx);
+    assert_eq!(collected.len(), 1);
+
+    let mut registry = CustomPropertyRegistry::new();
+    for rule in collected {
+      registry.register(RegisteredPropertyRule {
+        name: rule.rule.name.clone(),
+        syntax: rule.rule.syntax,
+        inherits: rule.rule.inherits,
+        initial_value: rule.rule.initial_value.clone(),
+      });
+    }
+
+    let rule = registry.get("--l0").expect("expected property to be registered");
+    assert_eq!(rule.syntax, CustomPropertySyntax::Length);
+    let initial = rule.initial_value.as_ref().expect("expected initial-value");
+    assert_eq!(initial.value, "0");
+    assert_eq!(
+      initial.typed,
+      Some(CustomPropertyTypedValue::Length(Length::px(0.0)))
+    );
+  }
+
+  #[test]
+  fn property_rule_color_parses_hex_initial_value() {
+    let css = r#"@property --c0 { syntax:"<color>"; inherits:false; initial-value:#0000 }"#;
+    let sheet = parse_stylesheet(css).expect("parse stylesheet");
+    let media_ctx = crate::style::media::MediaContext::screen(800.0, 600.0);
+    let collected = sheet.collect_property_rules(&media_ctx);
+    assert_eq!(collected.len(), 1);
+
+    let mut registry = CustomPropertyRegistry::new();
+    for rule in collected {
+      registry.register(RegisteredPropertyRule {
+        name: rule.rule.name.clone(),
+        syntax: rule.rule.syntax,
+        inherits: rule.rule.inherits,
+        initial_value: rule.rule.initial_value.clone(),
+      });
+    }
+
+    let rule = registry.get("--c0").expect("expected property to be registered");
+    assert_eq!(rule.syntax, CustomPropertySyntax::Color);
+    let initial = rule.initial_value.as_ref().expect("expected initial-value");
+    assert_eq!(initial.value, "#0000");
+    assert_eq!(
+      initial.typed,
+      Some(CustomPropertyTypedValue::Color(CssColor::Rgba(Rgba::TRANSPARENT)))
+    );
+  }
+} 
