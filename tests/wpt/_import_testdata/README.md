@@ -13,6 +13,9 @@ The layout mirrors a tiny subset of upstream WPT with:
   - `srcset-external.html`: `srcset="https://example.com/..."` rejection
   - `svg-image-href.html`: SVG `<image href="...web-platform.test...">` rewrite
   - `svg-image-href-external.html`: SVG `<image href="https://example.com/...">` rejection
+  - `svg-image-xlink-href.html`: SVG `<image xlink:href="...web-platform.test...">` rewrite
+  - `svg-image-xlink-href-external.html`: SVG `<image xlink:href="https://example.com/...">` rejection
+  - `svg-anchor-xlink-href.html`: SVG `<a xlink:href="https://...">` navigation links are ignored
   - `unquoted-external.html`: unquoted `src=https://example.com/...` rejection
   - `text-url.html`: strict-offline rejection of network-looking strings outside fetch contexts
   - `imagesrcset.html`: `imagesrcset="...web-platform.test..."` rewrite

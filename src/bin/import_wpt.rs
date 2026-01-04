@@ -473,7 +473,7 @@ fn rewrite_html(
   }
 
   let attr_regex = Regex::new(
-    "(?i)(?P<prefix>\\s(?:src|xlink:href|poster|data)\\s*=\\s*[\"'])(?P<url>[^\"'>]+)(?P<suffix>[\"'])",
+    "(?i)(?P<prefix>\\s(?:src|poster|data)\\s*=\\s*[\"'])(?P<url>[^\"'>]+)(?P<suffix>[\"'])",
   )
   .unwrap();
   let url_regex =
@@ -482,7 +482,7 @@ fn rewrite_html(
   let import_regex =
     Regex::new("(?i)(?P<prefix>@import\\s+['\"])(?P<url>[^\"']+)(?P<suffix>['\"])").unwrap();
   let attr_unquoted_regex =
-    Regex::new("(?i)(?P<prefix>\\s(?:src|xlink:href|poster|data)\\s*=\\s*)(?P<url>[^\\s\"'>]+)")
+    Regex::new("(?i)(?P<prefix>\\s(?:src|poster|data)\\s*=\\s*)(?P<url>[^\\s\"'>]+)")
       .unwrap();
   let svg_href_regex = Regex::new(
     "(?is)(?P<prefix><(?:image|use|feimage)\\b[^>]*?\\shref\\s*=\\s*[\"'])(?P<url>[^\"'>]+)(?P<suffix>[\"'])",
@@ -533,6 +533,15 @@ fn rewrite_html(
 
   rewritten = apply_rewrite_no_suffix(
     &attr_unquoted_regex,
+    &rewritten,
+    config,
+    src_dir,
+    dest_dir,
+    &mut references,
+    &mut seen,
+  )?;
+
+  rewritten = apply_xlink_href_rewrite(
     &rewritten,
     config,
     src_dir,
@@ -785,6 +794,82 @@ fn apply_link_href_rewrite(
         .to_string();
 
       out = href_unquoted
+        .replace_all(&out, |caps: &regex::Captures<'_>| match rewrite_reference(
+          config,
+          src_dir,
+          dest_dir,
+          &caps["url"],
+          references,
+          seen,
+        ) {
+          Ok(Some(new_value)) => format!("{}{}", &caps["prefix"], new_value),
+          Ok(None) => caps[0].to_string(),
+          Err(err) => {
+            error = Some(err);
+            caps[0].to_string()
+          }
+        })
+        .to_string();
+
+      out
+    })
+    .to_string();
+
+  if let Some(err) = error {
+    return Err(err);
+  }
+
+  Ok(rewritten)
+}
+
+fn apply_xlink_href_rewrite(
+  input: &str,
+  config: &ImportConfig,
+  src_dir: &Path,
+  dest_dir: &Path,
+  references: &mut Vec<Reference>,
+  seen: &mut HashSet<PathBuf>,
+) -> Result<String> {
+  let tag_with_xlink = Regex::new("(?is)<(?P<tag>[a-z0-9:_-]+)\\b[^>]*\\sxlink:href\\b[^>]*>")
+    .unwrap();
+  let xlink_quoted = Regex::new(
+    "(?is)(?P<prefix>(?:^|\\s)xlink:href\\s*=\\s*[\"'])(?P<url>[^\"'>]+)(?P<suffix>[\"'])",
+  )
+  .unwrap();
+  let xlink_unquoted =
+    Regex::new("(?is)(?P<prefix>(?:^|\\s)xlink:href\\s*=\\s*)(?P<url>[^\\s\"'>]+)").unwrap();
+
+  let mut error: Option<ImportError> = None;
+  let rewritten = tag_with_xlink
+    .replace_all(input, |caps: &regex::Captures<'_>| {
+      if error.is_some() {
+        return caps[0].to_string();
+      }
+      let tag_name = caps.name("tag").map(|m| m.as_str()).unwrap_or("");
+      let tag = &caps[0];
+      if tag_name.eq_ignore_ascii_case("a") {
+        return tag.to_string();
+      }
+
+      let mut out = xlink_quoted
+        .replace_all(tag, |caps: &regex::Captures<'_>| match rewrite_reference(
+          config,
+          src_dir,
+          dest_dir,
+          &caps["url"],
+          references,
+          seen,
+        ) {
+          Ok(Some(new_value)) => format!("{}{}{}", &caps["prefix"], new_value, &caps["suffix"]),
+          Ok(None) => caps[0].to_string(),
+          Err(err) => {
+            error = Some(err);
+            caps[0].to_string()
+          }
+        })
+        .to_string();
+
+      out = xlink_unquoted
         .replace_all(&out, |caps: &regex::Captures<'_>| match rewrite_reference(
           config,
           src_dir,
@@ -1082,14 +1167,10 @@ fn find_network_urls(content: &str) -> Vec<String> {
   // This avoids false positives for strings that look like network URLs but are not fetches,
   // such as SVG namespace URIs (`xmlns="http://www.w3.org/2000/svg"`) or text embedded inside
   // `data:` URLs.
-  let attr_regex = Regex::new(
-    "(?i)\\s(?:src|xlink:href|poster|data)\\s*=\\s*[\"'](?P<url>[^\"'>]+)[\"']",
-  )
-  .unwrap();
-  let attr_unquoted_regex = Regex::new(
-    "(?i)\\s(?:src|xlink:href|poster|data)\\s*=\\s*(?P<url>[^\\s\"'>]+)",
-  )
-  .unwrap();
+  let attr_regex =
+    Regex::new("(?i)\\s(?:src|poster|data)\\s*=\\s*[\"'](?P<url>[^\"'>]+)[\"']").unwrap();
+  let attr_unquoted_regex =
+    Regex::new("(?i)\\s(?:src|poster|data)\\s*=\\s*(?P<url>[^\\s\"'>]+)").unwrap();
   let url_regex =
     Regex::new("(?i)url\\(\\s*[\"']?(?P<url>[^\"')]+)[\"']?\\s*\\)").unwrap();
   let import_regex = Regex::new("(?i)@import\\s+[\"'](?P<url>[^\"']+)[\"']").unwrap();
@@ -1151,8 +1232,8 @@ fn find_network_urls(content: &str) -> Vec<String> {
   }
 
   // SVG fetch contexts commonly use `href=` (SVG2) or `xlink:href=` (SVG1). We already scan
-  // `xlink:href`, but `href` would otherwise be missed when we avoid flagging non-fetchable
-  // HTML anchors and metadata links.
+  // `href` would otherwise be missed when we avoid flagging non-fetchable HTML anchors and
+  // metadata links.
   let svg_href = Regex::new(
     "(?is)<(?:image|use|feimage)\\b[^>]*\\shref\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)'|([^\\s>]+))",
   )
@@ -1162,6 +1243,25 @@ fn find_network_urls(content: &str) -> Vec<String> {
       .get(1)
       .or_else(|| caps.get(2))
       .or_else(|| caps.get(3))
+      .map(|m| m.as_str())
+      .unwrap_or("");
+    if is_network_url(raw) {
+      urls.push(raw.to_string());
+    }
+  }
+
+  // For `xlink:href`, ignore `<a xlink:href>` navigation links but treat all other tags as
+  // potential resource references (e.g. `<image>`, gradients, patterns, filters).
+  let xlink_attr = Regex::new("(?is)<(?P<tag>[a-z0-9:_-]+)\\b[^>]*\\sxlink:href\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)'|([^\\s>]+))").unwrap();
+  for caps in xlink_attr.captures_iter(content) {
+    let tag = caps.name("tag").map(|m| m.as_str()).unwrap_or("");
+    if tag.eq_ignore_ascii_case("a") {
+      continue;
+    }
+    let raw = caps
+      .get(2)
+      .or_else(|| caps.get(3))
+      .or_else(|| caps.get(4))
       .map(|m| m.as_str())
       .unwrap_or("");
     if is_network_url(raw) {
@@ -1856,6 +1956,72 @@ mod tests {
       }
       other => panic!("unexpected error: {other:?}"),
     }
+  }
+
+  #[test]
+  fn rewrites_and_validates_svg_image_xlink_href() {
+    let out_dir = TempDir::new().unwrap();
+    let config = ImportConfig {
+      wpt_root: fixture_root(),
+      suites: vec!["html/network/svg-image-xlink-href.html".to_string()],
+      out_dir: out_dir.path().join("out"),
+      manifest_path: None,
+      dry_run: false,
+      overwrite: false,
+      strict_offline: false,
+      allow_network: false,
+    };
+
+    run_import(config).expect("import should succeed");
+    let imported =
+      fs::read_to_string(out_dir.path().join("out/html/network/svg-image-xlink-href.html")).unwrap();
+    assert!(!imported.contains("web-platform.test"));
+    assert!(out_dir.path().join("out/resources/green.png").exists());
+
+    let out_dir2 = TempDir::new().unwrap();
+    let config = ImportConfig {
+      wpt_root: fixture_root(),
+      suites: vec!["html/network/svg-image-xlink-href-external.html".to_string()],
+      out_dir: out_dir2.path().join("out"),
+      manifest_path: None,
+      dry_run: false,
+      overwrite: false,
+      strict_offline: false,
+      allow_network: false,
+    };
+
+    let err = run_import(config).unwrap_err();
+    match err {
+      ImportError::NetworkUrlsRemaining(path, urls) => {
+        assert!(path
+          .to_string_lossy()
+          .contains("svg-image-xlink-href-external.html"));
+        assert!(urls.contains("example.com"));
+      }
+      other => panic!("unexpected error: {other:?}"),
+    }
+  }
+
+  #[test]
+  fn ignores_svg_anchor_xlink_hrefs() {
+    let out_dir = TempDir::new().unwrap();
+    let config = ImportConfig {
+      wpt_root: fixture_root(),
+      suites: vec!["html/network/svg-anchor-xlink-href.html".to_string()],
+      out_dir: out_dir.path().join("out"),
+      manifest_path: None,
+      dry_run: false,
+      overwrite: false,
+      strict_offline: false,
+      allow_network: false,
+    };
+
+    run_import(config).expect("import should succeed");
+    let imported =
+      fs::read_to_string(out_dir.path().join("out/html/network/svg-anchor-xlink-href.html")).unwrap();
+    assert!(imported.contains("xlink:href=\"https://example.com/spec\""));
+    assert!(!imported.contains("xlink:href=\"/resources/"));
+    assert!(out_dir.path().join("out/resources/green.png").exists());
   }
 
   #[test]
