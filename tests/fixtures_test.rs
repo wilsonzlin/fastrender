@@ -239,6 +239,7 @@ fn test_all_fixture_files_exist() {
     "text_combine_upright_scale",
     "text_decoration_thickness_auto_vs_from_font",
     "shadow_dom",
+    "shadow_dom_selectors",
     "svg_foreign_object",
   ];
 
@@ -576,6 +577,11 @@ fn test_fixture_text_decoration_thickness_auto_vs_from_font() {
 #[test]
 fn test_fixture_shadow_dom() {
   test_fixture("shadow_dom").expect("shadow_dom fixture should render");
+}
+
+#[test]
+fn test_fixture_shadow_dom_selectors() {
+  test_fixture("shadow_dom_selectors").expect("shadow_dom_selectors fixture should render");
 }
 
 //

@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Shadow DOM Selectors Fixture</title>
+    <style>
+      body {
+        margin: 0;
+        padding: 20px;
+        font-family: sans-serif;
+        background: rgb(255, 255, 255);
+      }
+
+      .row {
+        display: flex;
+        gap: 24px;
+      }
+
+      .context {
+        padding: 12px;
+        border: 2px solid rgb(40, 40, 40);
+      }
+
+      .context-label {
+        font-size: 14px;
+        margin: 0 0 10px 0;
+        color: rgb(20, 20, 20);
+      }
+
+      /* Document-level styling across shadow boundaries via ::part(). */
+      x-host::part(outer-label) {
+        display: inline-block;
+        padding: 4px 6px;
+        background: rgb(255, 255, 0);
+        border: 2px solid rgb(0, 0, 180);
+        color: rgb(0, 0, 180);
+        font-weight: 700;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="row">
+      <div class="context">
+        <div class="context-label">:host (default)</div>
+        <x-host exportparts="label:outer-label">
+          <template shadowroot="open">
+            <style>
+              :host {
+                display: block;
+                box-sizing: border-box;
+                width: 260px;
+                height: 180px;
+                padding: 12px;
+                background: rgb(204, 255, 204);
+                border: 6px solid rgb(0, 128, 0);
+              }
+
+              :host-context(.dark) {
+                background: rgb(204, 204, 255);
+              }
+
+              .stack {
+                display: flex;
+                flex-direction: column;
+                gap: 10px;
+              }
+
+              .slot-box {
+                border: 2px solid rgb(0, 0, 0);
+                padding: 6px;
+              }
+
+              ::slotted(.title) {
+                color: rgb(255, 0, 0);
+                font-weight: 700;
+              }
+            </style>
+            <div class="stack">
+              <div>
+                <span part="label">::part(outer-label)</span>
+              </div>
+              <div class="slot-box"><slot name="title"></slot></div>
+              <div class="slot-box"><slot name="body"></slot></div>
+            </div>
+          </template>
+
+          <span slot="title" class="title">::slotted(.title)</span>
+          <span slot="body">not .title</span>
+        </x-host>
+      </div>
+
+      <div class="context dark">
+        <div class="context-label">:host-context(.dark)</div>
+        <x-host exportparts="label:outer-label">
+          <template shadowroot="open">
+            <style>
+              :host {
+                display: block;
+                box-sizing: border-box;
+                width: 260px;
+                height: 180px;
+                padding: 12px;
+                background: rgb(204, 255, 204);
+                border: 6px solid rgb(0, 128, 0);
+              }
+
+              :host-context(.dark) {
+                background: rgb(204, 204, 255);
+              }
+
+              .stack {
+                display: flex;
+                flex-direction: column;
+                gap: 10px;
+              }
+
+              .slot-box {
+                border: 2px solid rgb(0, 0, 0);
+                padding: 6px;
+              }
+
+              ::slotted(.title) {
+                color: rgb(255, 0, 0);
+                font-weight: 700;
+              }
+            </style>
+            <div class="stack">
+              <div>
+                <span part="label">::part(outer-label)</span>
+              </div>
+              <div class="slot-box"><slot name="title"></slot></div>
+              <div class="slot-box"><slot name="body"></slot></div>
+            </div>
+          </template>
+
+          <span slot="title" class="title">::slotted(.title)</span>
+          <span slot="body">not .title</span>
+        </x-host>
+      </div>
+    </div>
+  </body>
+</html>
