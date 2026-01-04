@@ -441,6 +441,8 @@ fn process_directory(
       key,
       before_path,
       after_path,
+      Some(before_dir),
+      Some(after_dir),
       html_dir,
       diff_dir,
       tolerance,
@@ -535,6 +537,8 @@ fn process_files(
     &name,
     Some(before),
     Some(after),
+    None,
+    None,
     html_dir,
     diff_dir,
     tolerance,
@@ -551,6 +555,8 @@ fn process_entry(
   name: &str,
   before_path: Option<&Path>,
   after_path: Option<&Path>,
+  before_root: Option<&Path>,
+  after_root: Option<&Path>,
   html_dir: &Path,
   diff_dir: &Path,
   tolerance: u8,
@@ -569,7 +575,13 @@ fn process_entry(
       after: after_rel,
       diff: None,
       metrics: None,
-      error: Some(format!("Missing in before input: {name}.png")),
+      error: Some(match before_root {
+        Some(root) => format!(
+          "Missing in before input: {}",
+          diff_path_for_name(root, name).display()
+        ),
+        None => format!("Missing in before input: {name}.png"),
+      }),
     },
     (Some(_), None) => DiffReportEntry {
       name: name.to_string(),
@@ -578,7 +590,13 @@ fn process_entry(
       after: None,
       diff: None,
       metrics: None,
-      error: Some(format!("Missing in after input: {name}.png")),
+      error: Some(match after_root {
+        Some(root) => format!(
+          "Missing in after input: {}",
+          diff_path_for_name(root, name).display()
+        ),
+        None => format!("Missing in after input: {name}.png"),
+      }),
     },
     (Some(before), Some(after)) => {
       totals.processed += 1;
