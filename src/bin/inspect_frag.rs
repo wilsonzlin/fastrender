@@ -407,6 +407,8 @@ fn run_dump_outputs(
     fs::create_dir_all(dir)?;
     let snapshot = snapshot_pipeline(&dom, &styled, &box_tree, &fragment_tree, &display_list);
     write_pretty_json(&dir.join("dom.json"), &snapshot.dom)?;
+    let composed_dom = fastrender::debug::snapshot::snapshot_composed_dom(&dom)?;
+    write_pretty_json(&dir.join("composed_dom.json"), &composed_dom)?;
     write_pretty_json(&dir.join("styled.json"), &snapshot.styled)?;
     write_pretty_json(&dir.join("box_tree.json"), &snapshot.box_tree)?;
     write_pretty_json(&dir.join("fragment_tree.json"), &snapshot.fragment_tree)?;

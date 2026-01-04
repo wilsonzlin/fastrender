@@ -41,6 +41,7 @@ fn inspect_frag_dump_json_creates_files() {
 
   for name in [
     "dom.json",
+    "composed_dom.json",
     "styled.json",
     "box_tree.json",
     "fragment_tree.json",
