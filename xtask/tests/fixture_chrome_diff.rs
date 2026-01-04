@@ -58,6 +58,7 @@ fn no_fastrender_fails_on_mismatched_metadata() {
   let out_dir = temp.path().join("out");
   let fastrender_dir = out_dir.join("fastrender");
   fs::create_dir_all(&fastrender_dir).expect("create fastrender out dir");
+  fs::create_dir_all(out_dir.join("chrome")).expect("create chrome out dir");
 
   // Ensure we don't accidentally try to build or run the real diff_renders binary if the
   // metadata validation regresses.
